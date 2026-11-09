@@ -141,12 +141,27 @@ function lengthPrefixHypotheses(stream: Buffer): FramingHypothesis[] {
           const small = segmentation.messages.reduce((n, m) => n + (m.length < Math.max(4, lenOffset + size) ? 1 : 0), 0);
           if (small > 0) continue;
 
+          const values = segmentation.offsets.map((offset) => readValue(stream, offset + lenOffset, size, endian));
+          const distinctValues = new Set(values).size;
+          const zeroShare = values.filter((value) => value === 0).length / values.length;
+
+          // A length field that never varies is not evidence of length-prefixed framing: the
+          // hypothesis degenerates to fixed-size messages, and reporting it as a length field
+          // invents a field the protocol does not have.
+          const constantField = distinctValues < 2;
+          // Zero-heavy streams (MBAP headers, padded structures) let a small length field tile
+          // by accident: most boundaries are "0 + bias". Avoid the byte when it carries no
+          // information in the majority of messages.
+          const uninformativeField = zeroShare > 0.5;
+
           const score =
             PRIOR['length-prefix'] -
             0.025 * Math.min(Math.abs(bias), 8) -
             0.015 * lenOffset +
             (size === 2 ? 0.02 : 0) +
-            (count >= 6 ? 0.02 : 0);
+            (count >= 6 ? 0.02 : 0) -
+            (constantField ? 0.2 : 0) -
+            (uninformativeField ? 0.22 : 0);
 
           out.push({
             kind: 'length-prefix',
@@ -163,6 +178,12 @@ function lengthPrefixHypotheses(stream: Buffer): FramingHypothesis[] {
               lenOffset > 0
                 ? `bytes [0, ${lenOffset}) sit before the length field and are treated as fixed header`
                 : 'the length field is assumed to be the first byte of every message',
+              ...(constantField
+                ? [`the length field held the value 0x${values[0]!.toString(16)} in every message, so this is indistinguishable from fixed-size framing`]
+                : []),
+              ...(uninformativeField
+                ? [`the length field was zero in ${Math.round(zeroShare * 100)}% of messages; those sizes come from the bias, not the field`]
+                : []),
             ],
           });
         }
@@ -170,7 +191,38 @@ function lengthPrefixHypotheses(stream: Buffer): FramingHypothesis[] {
     }
   }
 
-  return out;
+  return dedupeBySegmentation(out, stream);
+}
+
+/**
+ * Two parameterisations can produce the same message boundaries. On a byte stream, a 2-byte
+ * length at offset 4 and a 4-byte length at offset 2 are indistinguishable when the protocol-id
+ * field between them is a constant zero — both walk the stream identically. The data cannot
+ * settle it, so the tie breaks on the width prior: 16-bit lengths are the common case, then
+ * 8-bit, then 32-bit. Reporting 2 bytes over bytes that are never used is the safer error,
+ * because it leaves a `reserved` field where the wider reading invented meaning.
+ */
+function dedupeBySegmentation(hypotheses: FramingHypothesis[], stream: Buffer): FramingHypothesis[] {
+  const best = new Map<string, FramingHypothesis>();
+  for (const hypothesis of hypotheses) {
+    const signature = hypothesis.offsets.join(',');
+    const existing = best.get(signature);
+    if (!existing) {
+      best.set(signature, hypothesis);
+      continue;
+    }
+    if (isPreferredLengthField(hypothesis.lengthPrefix!, existing.lengthPrefix!)) best.set(signature, hypothesis);
+  }
+  void stream;
+  return [...best.values()];
+}
+
+const WIDTH_PRIOR: Record<1 | 2 | 4, number> = { 2: 0, 1: 1, 4: 2 };
+
+function isPreferredLengthField(candidate: LengthPrefixSpec, incumbent: LengthPrefixSpec): boolean {
+  if (candidate.size !== incumbent.size) return WIDTH_PRIOR[candidate.size] < WIDTH_PRIOR[incumbent.size];
+  if (Math.abs(candidate.bias) !== Math.abs(incumbent.bias)) return Math.abs(candidate.bias) < Math.abs(incumbent.bias);
+  return candidate.lenOffset < incumbent.lenOffset;
 }
 
 function walkLengthPrefix(stream: Buffer, spec: LengthPrefixSpec): Segmentation | null {

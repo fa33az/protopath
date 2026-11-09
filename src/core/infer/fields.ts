@@ -252,7 +252,9 @@ export function inferFields(input: FieldInferenceInput): FieldInference {
         ],
       });
       cursor += opcode.width;
-      continue;
+      // One message type is expected. A second low-cardinality byte in the header is data that
+      // happens to repeat in this session, not another type field.
+      break;
     }
 
     // Anything left is data that happens to sit inside the common prefix.
@@ -318,20 +320,24 @@ function payloadField(offset: number, evidence: string, confidence: number): Fie
 }
 
 /**
- * A message type is a small field with few distinct values. Two bytes are preferred when
- * they stay below the distinctness threshold, because a one-byte split of a two-byte type
- * produces two useless fields.
+ * A message type is a small field with few distinct values. Two signals are used, in order:
+ *
+ * - cardinality: the value must repeat across messages, otherwise it is data
+ * - collapse: a two-byte reading is only preferred when pairing the bytes actually reduces
+ *   the alphabet, which is what a 16-bit type does and what "type plus the first data byte"
+ *   does not
  */
 function tryOpcode(messages: Buffer[], cursor: number, prefixLength: number): { width: 1 | 2 } | null {
-  const threshold = Math.max(6, Math.ceil(messages.length * 0.3));
+  const cap = Math.max(6, Math.ceil(messages.length * 0.75));
+  const singles = new Set(messages.map((m) => m[cursor]!));
+  if (singles.size < 2 || singles.size > cap) return null;
+
   if (cursor + 2 <= prefixLength) {
-    const pairs = messages.map((m) => readAt(m, cursor, 2, 'be'));
-    if (new Set(pairs).size <= threshold && new Set(pairs).size >= 2) return { width: 2 };
+    const pairs = new Set(messages.map((m) => readAt(m, cursor, 2, 'be')));
+    if (pairs.size >= 2 && pairs.size <= cap && pairs.size <= Math.ceil(singles.size * 0.6)) return { width: 2 };
   }
-  const singles = messages.map((m) => m[cursor]!);
-  const distinct = new Set(singles).size;
-  if (distinct >= 2 && distinct <= Math.min(threshold, 16)) return { width: 1 };
-  return null;
+
+  return { width: 1 };
 }
 
 function runEnd(
@@ -366,8 +372,11 @@ function findWideCounters(
   const found: Array<{ offset: number; width: 2 | 4; endian: Endian }> = [];
   if (messages.length < 4) return found;
 
-  for (const width of [4, 2] as const) {
-    for (let offset = 0; offset + width <= limit; offset++) {
+  // Lowest offset first, then narrower width: the low bytes of a counter are the ones that
+  // step, so the smaller reading is the one the data actually supports.
+  for (let offset = 0; offset < limit; offset++) {
+    for (const width of [2, 4] as const) {
+      if (offset + width > limit) continue;
       if (lengthSpan && offset < lengthSpan[1] && offset + width > lengthSpan[0]) continue;
       if (found.some((c) => offset < c.offset + c.width && offset + width > c.offset)) continue;
 

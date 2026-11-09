@@ -31,7 +31,20 @@ happens to fit the first message will not land on the end of the buffer.
 the stream is walked and segmented. The bias collapses the usual variants (`length` includes
 itself, includes the header, excludes the trailer) into one parameter.
 
-Score: `0.92 - 0.025·min(|bias|, 8) - 0.015·offset (+0.02 for 16-bit, +0.02 for 6+ messages)`.
+Score:
+`0.92 - 0.025·min(|bias|, 8) - 0.015·offset (+0.02 for 16-bit, +0.02 for 6+ messages)
+− 0.20 if the field never varied − 0.22 if it was zero in more than half the messages`
+
+The two penalties exist because of a real capture. MBAP headers are full of `0x00` bytes, so a
+1-byte "length" at offset 0 with bias +4 happily tiles a Modbus stream into four-byte messages.
+A length field that never varies is fixed-size framing with an extra claim attached; a length
+field that is zero in most messages is a constant byte plus a bias. Neither is evidence of
+length-prefixed framing, and both are demoted rather than silently accepted.
+
+When two parameterisations produce the same boundaries — a 2-byte length at offset 4 and a
+4-byte length at offset 2 are indistinguishable when the bytes between them are a constant zero
+— the tie breaks on a width prior: 16-bit, then 8-bit, then 32-bit. The data cannot settle it;
+the prior decides, and the report says so by listing the alternatives.
 
 **Start-marker.** Markers are the first 2, 3 and 4 bytes of the stream. The stream is split at
 every occurrence and the marker must begin every message. All-zero and all-`0xff` markers are
@@ -71,10 +84,12 @@ Single-offset statistics across all messages:
 | every byte printable ASCII | `printable` |
 | otherwise | `var` |
 
-Before grouping, wide counters are searched: widths 4 and 2 at offsets inside the first 24 bytes,
+Before grouping, wide counters are searched: widths 2 and 4 at offsets inside the first 24 bytes,
 both endiannesses, requiring distinct values and exact `+1` steps modulo the width. This runs
 first because a two-byte little-endian counter otherwise looks like a constant byte followed by a
-stepping byte.
+stepping byte. Offsets are tried low to high and widths narrow to wide, so the reported field is
+the smallest reading the data supports: a counter whose upper bytes never moved is reported as
+2 bytes, not 4.
 
 Grouping, left to right:
 
@@ -84,8 +99,11 @@ Grouping, left to right:
 4. Single-byte stepping → `sequence` (1 byte, confidence 0.88).
 5. Constant run → `reserved`.
 6. Printable run of 2+ bytes → `text`.
-7. `var` offset or pair with few distinct values → `type`, when distinct count is at most
-   `max(6, 30% of messages)`.
+7. A `var` offset becomes `type` when its value repeats enough to be a type rather than data:
+   the distinct count must stay under `max(6, 75% of messages)`. A 2-byte reading wins over a
+   1-byte one only when pairing the bytes actually shrinks the alphabet, which is what a 16-bit
+   type does and what "type plus the first data byte" does not. At most one type field per
+   direction is accepted; a second low-cardinality byte is data that happens to repeat.
 8. Anything else ends the header; the remainder is `payload`.
 
 A detected checksum is appended as a tail-anchored field at `len - offsetFromEnd - width`, so it

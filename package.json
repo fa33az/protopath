@@ -1,7 +1,7 @@
 {
-  "name": "protopath",
+  "name": "protopath-mcp",
   "version": "0.1.0",
-  "description": "Infer wire protocol structure from raw captures, and hand the result to an agent.",
+  "description": "Infer wire protocol structure from a pcap or pcapng capture: framing, fields, counters, checksums. MCP server, Wireshark dissector, TypeScript and Python clients.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -18,18 +18,45 @@
   "files": [
     "dist",
     "docs",
+    "captures",
     "README.md",
     "LICENSE"
   ],
   "engines": {
     "node": ">=20.19"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "reverse-engineering",
+    "protocol",
+    "protocol-analysis",
+    "pcap",
+    "pcapng",
+    "wireshark",
+    "network",
+    "agent",
+    "claude",
+    "security"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fa33az/protopath.git"
+  },
+  "homepage": "https://github.com/fa33az/protopath#readme",
+  "bugs": {
+    "url": "https://github.com/fa33az/protopath/issues"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:test": "tsc -p tsconfig.tests.json",
     "captures": "npm run build:test && node dist-test/scripts/make-captures.js",
     "test": "npm run build:test && node --test \"dist-test/tests/*.test.js\"",
-    "cli": "node dist/cli/index.js"
+    "cli": "node dist/cli/index.js",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

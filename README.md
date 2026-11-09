@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/fa33az/protopath/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-39%20passing-2ea043?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-45%20passing-2ea043?style=flat-square">
   <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A520.19-339933?style=flat-square&logo=node.js&logoColor=white">
   <img alt="mcp" src="https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square">
   <img alt="captures" src="https://img.shields.io/badge/capture-pcap%20%C2%B7%20pcapng-cb3837?style=flat-square">
@@ -48,11 +48,16 @@ ruled out.
 
 ## Quick start
 
+From source, which is how it runs today:
+
 ```console
 $ git clone https://github.com/fa33az/protopath && cd protopath
 $ npm install && npm run build && npm link
 $ protopath analyze captures/binary-session.pcap
 ```
+
+The package is publish-ready as `protopath-mcp`; once it is on the registry, `npx protopath-mcp`
+replaces the three commands above.
 
 No native dependency, no compiler, no capture library. Everything above the operating system is
 in the repository.
@@ -174,8 +179,37 @@ Read the full method, including the scoring formulas and the symptom-to-cause ta
 
 ## Showcases
 
-Five captures ship with the repository. Every protocol is synthetic and documented, so the test
-suite checks each inference against a known answer instead of against another inference.
+Six captures ship with the repository. Five are synthetic with documented ground truth, so the
+test suite checks each inference against a known answer instead of against another inference. The
+sixth was recorded from a real protocol implementation.
+
+### Modbus/TCP, recorded from a real implementation
+
+```console
+$ python scripts/record-modbus.py captures/modbus-session.pcap
+$ protopath analyze captures/modbus-session.pcap
+```
+
+```
+| Field        | Role     | Offset | Width | Confidence | Why                                      |
+|--------------|----------|--------|-------|------------|------------------------------------------|
+| sequence     | counter  | 0      | 2     | 0.95       | +1 per message, 2-byte big endian        |
+| reserved     | reserved | 2      | 2     | 0.90       | 0x0000 in all 15 messages                |
+| length       | length   | 4      | 2     | 0.97       | reproduces message length when 6 is added|
+| reserved_2   | reserved | 6      | 1     | 0.90       | 0x01 in all 15 messages                  |
+| type         | opcode   | 7      | 1     | 0.80       | 8 distinct function codes                |
+| payload      | payload  | 8      | var   | 0.60       | 12 to 19 bytes                           |
+```
+
+That is the Modbus/TCP application header, recovered from bytes a pymodbus client generated:
+transaction identifier as a counter, constant protocol identifier, 16-bit length with a +6 bias,
+unit identifier, function code. Both directions agreed independently, and no checksum was
+claimed because Modbus/TCP has none.
+
+This capture is the reason three inference rules exist — over-segmentation on zero-heavy streams,
+ambiguous length width, and an opcode threshold too strict for an eight-code alphabet. Every one
+of them is documented with the failure that produced it:
+**[docs/showcase-modbus.md](docs/showcase-modbus.md)**.
 
 ### Binary session: framing, counter and checksum at once
 
@@ -310,13 +344,14 @@ parse". A report that only half-holds should not look like success.
 plaintext exists.
 
 **What is the answer to the benchmark?** There is no benchmark. The fixtures are the honest
-substitute: five protocols with documented layouts, and 39 tests that fail when the inference
-changes.
+substitute: six protocols with documented layouts — five synthetic, one recorded from pymodbus — and
+45 tests that fail when the inference changes.
 
 ## Documentation
 
 - [Design](docs/design.md) — the method, the scoring formulas, the failure modes
-- [Capture formats](docs/captures.md) — the five fixture protocols and their ground truth
+- [Modbus showcase](docs/showcase-modbus.md) — a real capture, and the three defects it exposed
+- [Capture formats](docs/captures.md) — the six fixture protocols and their ground truth
 - [CLI](#cli) and [MCP tools](#mcp-tools) — the two interfaces to the same analysis
 
 ## Development
@@ -324,7 +359,7 @@ changes.
 ```console
 $ npm install
 $ npm run captures   # regenerate captures/ deterministically
-$ npm test           # build and run 39 tests
+$ npm test           # build and run 45 tests
 ```
 
 ```

@@ -100,6 +100,39 @@ rest. `reserved` padding is what stops the header from extending further.
 | binary-session-v2.pcap | length-prefix, 1B BE @2, bias 0 | 8 + 8 | crc16/modbus 8/8 | type byte removed |
 | text-session.pcap | delimiter `0x0a` | 8 + 8 | none | ASCII protocol |
 | sensor-udp.pcap | start-marker `0xaa55` | 24 | none | UDP, no session |
+| modbus-session.pcap | length-prefix, 2B BE @4, bias 6 | 15 + 15 | none | recorded from a real implementation |
+
+---
+
+## `modbus-session.pcap`
+
+The only capture here that is not synthetic. `scripts/record-modbus.py` runs a pymodbus server, a
+pymodbus client and a byte-level TCP proxy that writes what the two libraries exchanged into a
+pcap. Fifteen operations, mixed reads and writes, plus one Modbus exception response.
+
+Ground truth is the Modbus/TCP application header from the specification:
+
+```
+offset  size  field
+0       2     transaction identifier, big endian, +1 per request
+2       2     protocol identifier, always 0x0000
+4       2     length, big endian, counts unit id and PDU (so total = length + 6)
+6       1     unit identifier, 0x01 in this session
+7       n     function code, then PDU data
+```
+
+protopath recovers exactly that layout in both directions, reports no checksum field, and labels
+messages by function code (`type=0x03`, `type=0x10`, …).
+
+Read the full write-up, including the three inference defects this capture exposed:
+**[showcase-modbus.md](showcase-modbus.md)**.
+
+Regenerate with:
+
+```console
+$ pip install pymodbus
+$ python scripts/record-modbus.py captures/modbus-session.pcap
+```
 
 These numbers are asserted in `tests/`. If a change to the inference changes them, the test
 fails before the README can go stale.
