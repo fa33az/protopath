@@ -163,3 +163,10 @@ $ python scripts/record-modbus.py captures/modbus-session.pcap
 
 These numbers are asserted in `tests/`. If a change to the inference changes them, the test
 fails before the README can go stale.
+
+---
+
+These fixtures are the regression suite. The generalisation test is separate: twelve captures the
+inference code was never developed against, with a manifest that states the expected answer before
+the tool runs. See [benchmark.md](benchmark.md).
+
