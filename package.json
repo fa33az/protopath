@@ -54,7 +54,7 @@
     "build": "tsc -p tsconfig.json",
     "build:test": "tsc -p tsconfig.tests.json",
     "captures": "npm run build:test && node dist-test/scripts/make-captures.js",
-    "test": "npm run build:test && node --test \"dist-test/tests/*.test.js\"",
+    "test": "npm run build:test && node scripts/run-tests.mjs",
     "cli": "node dist/cli/index.js",
     "prepublishOnly": "npm run build && npm test"
   },
