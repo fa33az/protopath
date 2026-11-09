@@ -532,6 +532,7 @@ recorded from pymodbus — and 75 tests that fail when the inference changes.
 ## Documentation
 
 - [Design](docs/design.md) — the method, the scoring formulas, the failure modes
+- [Audit](docs/audit.md) — eleven defects found by running the build against inputs the tests do not contain
 - [Benchmark](docs/benchmark.md) — twelve unseen protocols, the score, and the defects they found
 - [CRC recovery](docs/crc-recovery.md) — the algebra, the ambiguity, and a fixture that proves it
 - [Modbus showcase](docs/showcase-modbus.md) — a real capture, and the three defects it exposed
