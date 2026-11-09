@@ -1,151 +1,227 @@
-# protopath
+<p align="center">
+  <img src="docs/assets/pipeline.svg" alt="protopath pipeline" width="100%">
+</p>
 
-Infer wire-protocol structure from a packet capture, then hand the result to an agent.
+<h1 align="center">protopath: Infer Any Wire Protocol</h1>
 
-You have traffic and no specification. `protopath` reads the capture, works out how messages
-are framed, which bytes are fields, which field is a counter, whether there is a checksum,
-and which message type follows which. Every finding comes with the evidence that produced it
-and the alternative it could not rule out. Then it writes a Wireshark dissector, clients, a
-mutation harness, and a report — or exposes the same analysis to an agent over MCP.
+<h3 align="center">One MCP server that turns a packet capture into a protocol model, down to the checksum.</h3>
+
+<p align="center"><b>See traffic you cannot read. Learn how it is framed, then build against it.</b></p>
+
+<p align="center">
+  <a href="https://github.com/fa33az/protopath/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
+  <img alt="tests" src="https://img.shields.io/badge/tests-39%20passing-2ea043?style=flat-square">
+  <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A520.19-339933?style=flat-square&logo=node.js&logoColor=white">
+  <img alt="mcp" src="https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square">
+  <img alt="captures" src="https://img.shields.io/badge/capture-pcap%20%C2%B7%20pcapng-cb3837?style=flat-square">
+</p>
+
+<p align="center">
+  <b>pcap</b> · <b>pcapng</b> · <b>TCP reassembly</b> · <b>5 framing families</b> · <b>12 checksums</b> · <b>Wireshark dissector</b>
+</p>
+
+---
+
+See traffic from a device, a plugin, a game, an appliance you do not have the source for. Ask
+protopath what the messages are. It reports how they are framed, where the fields start, which
+one is a counter, whether a checksum covers the rest, and what the exchange looks like as a
+state graph — each answer attached to the bytes that produced it.
+
+```
+PROTOPATH  1 proprietary protocol recovered, 0 bytes left unexplained
+
+  framing      length-prefixed, 1-byte big-endian length at offset 2, bias 0   (0.91)
+  fields       magic · length · sequence(2 LE) · type · payload · checksum
+  checksum     crc16/modbus over [0, len-2), little endian —— 10/10 messages
+  messages     10 outbound, 10 inbound, 5 retransmissions dropped
+  transitions  type=0x10 → type=0x11 (×8) · 0x11 → 0x10 (×6) · handshake on 0x01/0x02
+```
+
+<p align="center">
+  <img src="docs/assets/field-map.svg" alt="recovered field map" width="100%">
+</p>
+
+That layout was not entered anywhere. It is what remained after every other segmentation was
+ruled out.
+
+---
+
+## Quick start
+
+```console
+$ git clone https://github.com/fa33az/protopath && cd protopath
+$ npm install && npm run build && npm link
+$ protopath analyze captures/binary-session.pcap
+```
+
+No native dependency, no compiler, no capture library. Everything above the operating system is
+in the repository.
+
+### Set up your agent
+
+```console
+$ protopath setup --yes
+```
+
+Writes `.mcp.json` in the current directory with a `protopath` server entry and prints the
+equivalent one-liner for Claude Code, Cursor and Codex. Without `--yes` it prints and writes
+nothing.
+
+### Ask your agent
+
+> Read the capture at `captures/binary-session.pcap`. What is the framing, which bytes are the
+> sequence counter, is there a checksum, and write me a client that encodes a request.
+
+The agent calls `list_flows`, `analyze_capture`, `infer_fields`, `detect_checksums`,
+`emit_artifacts` and `diff_captures`. The same analysis is available from the terminal, so the
+two never disagree.
+
+### Use it as a library
+
+```js
+import { analyzeFile, emitClient } from 'protopath';
+
+const analysis = analyzeFile('captures/binary-session.pcap');
+const flow = analysis.flows[0];
+
+console.log(flow.forward.fields);        // offsets, roles, confidence, evidence
+console.log(flow.forward.checksums[0]);  // algorithm, range, agreement
+console.log(emitClient(flow, 'ts'));     // a compiling client, not a template
+```
+
+> **Analysis, not ground truth.** Every finding carries a score and the hypothesis it could not
+> rule out. When nothing clears the threshold the tool says so and exits `3` instead of returning
+> a confident-looking guess. Treat the field table as a map with a margin of error, not as a
+> specification.
+
+**[Design](docs/design.md)** · **[Capture formats](docs/captures.md)** · **[CLI](#cli)** · **[MCP tools](#mcp-tools)**
+
+---
+
+## How it works
+
+<p align="center">
+  <img src="docs/assets/pipeline.svg" alt="pipeline" width="100%">
+</p>
+
+Framing comes first, because a wrong frame length corrupts everything after it. Five families are
+enumerated — length-prefixed, start-marker, terminator-delimited, fixed-size, unframed — and a
+candidate only survives if it splits the stream into three or more messages and lands exactly on
+the last byte. An incorrect frame length will fit the first message and then miss the end of the
+buffer, which is why that single rule removes most wrong answers.
+
+Fields are then grouped from per-offset statistics: constant runs become `magic` or `reserved`,
+two- and four-byte monotone runs become `sequence`, the field that reproduces message length
+becomes `length`, low-cardinality fields become `type`, printable runs become `text`, and the rest
+is `payload`. Wide counters are searched before byte-level grouping, because a two-byte
+little-endian counter otherwise looks like a constant byte followed by a stepping one.
+
+Checksums are enumerated, not guessed: twelve algorithms across widths 1, 2 and 4, every field
+position, every covered range. A candidate is reported only when it matches every message, and
+the generator then emits the *inverse* of that algorithm into the client.
+
+The generated TypeScript is compiled by the test suite and the generated Python is executed
+against the real capture: decode, re-encode byte-for-byte, reject a corrupted message. If the
+generator regresses, the tests fail before the README can lie.
+
+Read the full method, including the scoring formulas and the symptom-to-cause table:
+**[docs/design.md](docs/design.md)**.
+
+---
+
+## What it can read
+
+| Capture side | Recovered | Notes |
+|---|---|---|
+| pcap, microsecond | frames, flows, bytes | classic format |
+| pcap, nanosecond | frames, flows, bytes | `0xa1b23c4d` magic |
+| pcapng | frames, flows, bytes | SHB/IDB/EPB/SPB, per-interface `if_tsresol` |
+| Ethernet | MAC → IP → transport | VLAN and QinQ tags skipped correctly |
+| Raw IP, Linux SLL, null/loopback | IP → transport | link types 101, 113, 0 |
+| IPv4 | TCP, UDP payloads | non-first fragments skipped and counted |
+| IPv6 | TCP, UDP payloads | hop-by-hop, routing, destination options skipped |
+| TCP | reassembled stream | sequence-number based, retransmits dropped, gaps reported |
+| UDP | concatenated datagrams | arrival order, no session |
+| TLS, QUIC, fragmented IP | nothing | opaque; decrypt or record at the API boundary |
+
+## What it infers
+
+| Family | Enumerated over | Kept when |
+|---|---|---|
+| length-prefixed | offset 0–8 × width 1/2/4 × endian × bias −6..12 | stream consumed exactly, 3+ messages |
+| start-marker | first 2, 3, 4 bytes | every message starts with it, density below 50% |
+| delimiter | `0a`, `0d0a`, `0d`, `00`, `0000`, `ff`, `03` | exact coverage, no residue |
+| fixed-size | every divisor 4–1024 | 3+ messages |
+| unframed | always | floor of the ranking, never a claim |
+
+| Field role | Evidence required |
+|---|---|
+| `magic` | identical bytes in every message, at offset 0 |
+| `length` | decoding it reproduces every message length |
+| `sequence` | value steps by exactly 1 per message, 1/2/4 bytes, either endianness |
+| `type` | at most `max(6, 30%)` distinct values |
+| `checksum` | matches every message for a named algorithm |
+| `text` | every byte printable across all messages |
+| `reserved` | constant, but not a framing marker |
+| `payload` | the remainder, bounded by the framing |
+
+| Checksum | Width | | Checksum | Width |
+|---|---|---|---|---|
+| `sum8`, `xor8`, `crc8`, `crc8/itu` | 1 | | `crc16/modbus`, `crc16/arc` | 2 |
+| `crc16/ccitt-false`, `crc16/xmodem` | 2 | | `sum16`, `crc32/ieee` | 2, 4 |
+
+---
+
+## Showcases
+
+Five captures ship with the repository. Every protocol is synthetic and documented, so the test
+suite checks each inference against a known answer instead of against another inference.
+
+### Binary session: framing, counter and checksum at once
 
 ```console
 $ protopath analyze captures/binary-session.pcap
 ```
 
 ```
-| Field                 | Role     | Offset | Width | Encoding | Confidence | Why                                                              |
-|-----------------------|----------|--------|-------|----------|------------|------------------------------------------------------------------|
-| `magic`               | magic    | 0      | 2     | bytes    | 0.95       | bytes 0..2 are 0xa55a in all 10 messages                         |
-| `length`              | length   | 2      | 1     | bytes    | 0.97       | a 1-byte be integer here reproduces every message length         |
-| `sequence`            | counter  | 3      | 2     | le       | 0.95       | value increases by exactly 1 per message                         |
-| `type`                | opcode   | 5      | 1     | bytes    | 0.80       | 2 distinct values across 10 messages                             |
-| `payload`             | payload  | 6      | var   | bytes    | 0.60       | message lengths range from 8 to 19 bytes                         |
-| `checksum_crc16_modbus` | checksum | end-2  | 2     | le       | 1.00       | crc16/modbus over bytes [0, len-2) matches in 10/10 messages     |
+| Field                   | Role     | Offset | Width | Confidence | Why                                              |
+|-------------------------|----------|--------|-------|------------|--------------------------------------------------|
+| magic                   | magic    | 0      | 2     | 0.95       | 0xa55a in all 10 messages                        |
+| length                  | length   | 2      | 1     | 0.97       | reproduces every message length                  |
+| sequence                | counter  | 3      | 2     | 0.95       | +1 per message, 2-byte little endian             |
+| type                    | opcode   | 5      | 1     | 0.80       | 2 distinct values across 10 messages             |
+| payload                 | payload  | 6      | var   | 0.60       | lengths range 8..19                              |
+| checksum_crc16_modbus   | checksum | end-2  | 2     | 1.00       | crc16/modbus over [0, len-2), 10/10              |
 ```
 
-That is the whole output reduced to its table. The full report also carries the framing
-hypotheses it rejected, the second-best answer with its score, reassembly damage, and a
-message-transition graph.
+The capture deliberately contains out-of-order segments and retransmissions. Reassembly keeps
+the stream intact and reports the retransmissions rather than hiding them.
 
-## Install
-
-Requires Node.js 20.19 or newer. There is nothing to compile and no native dependency.
+### Text protocol: knowing when to stop
 
 ```console
-$ npm install --global protopath
-$ protopath --help
+$ protopath analyze captures/text-session.pcap
 ```
 
-Or run it without installing:
+Resolution is a single `text` field. The correct answer for a line protocol is that the structure
+lives in the words, not in byte offsets, and the tool says that instead of inventing fields.
+
+### Datagrams with no session
 
 ```console
-$ npx protopath analyze capture.pcap
+$ protopath analyze captures/sensor-udp.pcap
 ```
 
-Register the agent side once, in the project you want it available in:
+24 datagrams, start-marker `0xaa55`, `sequence` detected at byte 3. This is why the counter
+detector exists: on UDP there is no transport-level ordering to lean on.
 
-```console
-$ protopath setup --yes
-```
-
-That writes `.mcp.json` with a `protopath` server entry and prints the equivalent command for
-Claude Code, Cursor and Codex. Without `--yes` it prints and writes nothing.
-
-## What it reads
-
-| Capture | Support |
-|---------|---------|
-| pcap, microsecond and nanosecond | yes |
-| pcapng (SHB/IDB/EPB/SPB) | yes, including per-interface `if_tsresol` |
-| Ethernet, VLAN, QinQ | yes |
-| Raw IP, Linux SLL, null/loopback | yes |
-| IPv4, IPv6, extension-header skipping | yes |
-| TCP with reassembly | sequence-number based, retransmits dropped, out-of-order placed |
-| UDP | datagrams concatenated per direction |
-| Fragmented IP, TLS, QUIC | no — see limits |
-
-## What it infers
-
-**Framing.** Five hypothesis families are enumerated and ranked: length-prefixed, start-marker,
-terminator-delimited, fixed-size, and unframed. A hypothesis only survives if it explains the
-stream byte-for-byte, so a wrong frame length almost never lands on the end of the buffer.
-Each surviving hypothesis reports its score, its parameters and its own limitation.
-
-**Fields.** Per-offset statistics over all messages: constant runs become `magic` or `reserved`,
-two- and four-byte monotonic runs become `sequence`, the field that reproduces message length
-becomes `length`, a low-cardinality field becomes `type`, printable runs become `text`, and the
-rest is `payload`. Tail-anchored fields (checksums) are located from the end of each message so
-they survive variable length.
-
-**Checksums.** Twelve algorithms across widths 1, 2 and 4 are enumerated against every plausible
-field position and covered range. A candidate is reported only when it matches every message.
-
-**Message transitions.** Messages from both directions are ordered by timestamp and labelled from
-the inferred type field, producing a first-order transition graph ready for a replay.
-
-## Generated artifacts
-
-`protopath emit capture.pcap` writes, for the strongest flow:
-
-| File | Contents |
-|------|----------|
-| `dissector.lua` | Wireshark dissector that consumes every message in a segment |
-| `client.ts` | Decoder, encoder, checksum inverse, verifier |
-| `client.py` | Same, for Python |
-| `fuzz.py` | Mutation harness that reuses `client.py` for encoding |
-| `report.md` | The full report |
-| `analysis.json` | Everything above, structured, buffers as hex |
-| `messages.jsonl` | Every recovered message with offset, timestamp and hex |
-
-The generated TypeScript is compiled in the test suite, and the generated Python carries the
-inverse of the checksum that was actually detected — not a placeholder.
-
-## CLI
-
-```
-protopath flows   <capture>                 list conversations
-protopath analyze <capture>                 infer framing, fields, checksums
-protopath emit    <capture> [--out <dir>]   write dissector, clients, fuzzer, report
-protopath diff    <captureA> <captureB>     compare two inferred layouts
-protopath setup   [--yes]                   register the MCP server
-```
-
-Flags: `--flow <key>`, `--max-flows <n>`, `--out <dir>`, `--port <n>`, `--json`,
-`--targets lua,ts,python,fuzz,report`.
-
-Exit codes: `0` confident analysis, `1` error, `3` analysis ran but no hypothesis cleared the
-confidence threshold. `3` is deliberate — it lets a pipeline fail loudly without pretending the
-report is useless.
-
-## MCP tools
-
-| Tool | Purpose |
-|------|---------|
-| `list_flows` | conversations with byte counts, gaps and retransmissions |
-| `analyze_capture` | the full report, markdown or JSON |
-| `infer_fields` | field table for one direction, with the reason for each boundary |
-| `detect_checksums` | checksum candidates and the range each covers |
-| `emit_artifacts` | write dissector, clients, harness and report to a directory |
-| `diff_captures` | framing changes, moved fields, fields that stopped varying |
-
-## Showcase
-
-`captures/` holds three synthetic protocols with documented ground truth, plus a second revision
-of the first one. They are generated by `scripts/make-captures.ts`, so every result in
-`tests/` is checked against a known answer rather than a vibe.
-
-```
-binary-session.pcap     length-prefixed, crc16/modbus trailer, 10 messages per direction
-binary-session-v2.pcap  same protocol with the type byte removed
-binary-session.pcapng   the same capture in pcapng, read through a different parser
-text-session.pcap       terminator-delimited ASCII, 8 messages per direction
-sensor-udp.pcap         24 datagrams, start-marker framing, no transport session
-```
-
-Detecting a protocol revision is one command:
+### A protocol revision, caught
 
 ```console
 $ protopath diff captures/binary-session.pcap captures/binary-session-v2.pcap
+```
+
+```
 flow 10.0.0.10:41000 <> 10.0.0.20:7401 tcp -> 10.0.0.10:42000 <> 10.0.0.20:7401 tcp
   framing: length-prefix 1B be @2 bias 0 -> length-prefix 1B be @2 bias 0
   verdict: fields moved; a client built for the first capture will misparse the second
@@ -154,45 +230,113 @@ flow 10.0.0.10:41000 <> 10.0.0.20:7401 tcp -> 10.0.0.10:42000 <> 10.0.0.20:7401 
   added    payload — new field at head offset 9
 ```
 
+The honest answer is that a field disappeared and the bytes shifted. The tool does not claim to
+know a type byte was removed; it shows where the layout moved and lets you decide.
+
+---
+
+## Generated artifacts
+
+| File | Contents |
+|---|---|
+| `dissector.lua` | Wireshark dissector, consumes every message in a segment |
+| `client.ts` | decoder, encoder, checksum inverse, verifier — compiled in CI |
+| `client.py` | same, executed against the capture in CI |
+| `fuzz.py` | mutation harness reusing `client.py` for encoding |
+| `report.md` | the full report, including rejected hypotheses |
+| `analysis.json` | everything structured, buffers as hex |
+| `messages.jsonl` | every message with offset, timestamp, label and hex |
+
+---
+
+## CLI
+
+```
+protopath flows   <capture>                 list conversations in a capture
+protopath analyze <capture>                 infer framing, fields and checksums
+protopath emit    <capture> [--out <dir>]   write dissector, clients, harness, report
+protopath diff    <captureA> <captureB>     compare two inferred layouts
+protopath setup   [--yes]                   register the MCP server with an agent
+```
+
+`--flow <key>` · `--max-flows <n>` · `--out <dir>` · `--port <n>` · `--json` ·
+`--targets lua,ts,python,fuzz,report`
+
+Exit codes: `0` confident analysis · `1` error · `3` no hypothesis cleared the threshold.
+
+## MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `list_flows` | conversations with byte counts, gaps and retransmissions |
+| `analyze_capture` | the full report, markdown or JSON |
+| `infer_fields` | field table for one direction, with the reason for each boundary |
+| `detect_checksums` | checksum candidates and the range each covers |
+| `emit_artifacts` | write dissector, clients, harness and report to a directory |
+| `diff_captures` | framing changes, moved fields, fields that stopped varying |
+
+---
+
 ## Limits
 
-These are the cases that produce a wrong or empty answer. They are not edge cases to be fixed
-later; they are the boundary of the method.
+| Symptom | Cause | Workaround |
+|---|---|---|
+| Chatty protocol looks unframed | framing fits none of the five families | capture a longer session; check the runner-up hypotheses |
+| `reserved` where a type belongs | the field never varied | capture both sides of the exchange |
+| Two hypotheses within 0.05 | the protocol genuinely fits both | compare the two field tables; the wrong one produces junk names |
+| No checksum candidate | non-standard seed, or range past byte 8 | verify by hand from `docs/design.md` |
+| A field boundary off by one | a header byte varies too much to classify | inspect the four hex messages the report prints |
 
-- **A field that never varies is invisible.** Ten messages that all carry `type=0x10` are
-  reported as `reserved`, correctly but unhelpfully. Capture both sides of the exchange.
-- **TLS and QUIC are opaque.** Decrypt first or record at the application boundary.
-- **Framing is ranked, not proven.** A length-prefixed protocol also looks like a start-marker
-  protocol when the marker is 2 bytes. When two hypotheses are within 0.05 the report says so.
-- **A single-byte marker is never accepted as a boundary.** Too little evidence, too many false
-  splits.
-- **Checksums are found, not explained.** A detected `crc16/modbus` is a match, not a claim
-  about why the vendor chose it. Some protocols obfuscate with an unknown seed; those appear
-  as no candidate at all.
-- **TCP reassembly assumes one connection per 4-tuple.** A capture that reuses a 4-tuple across
-  connections will merge them.
+Also: a single-byte start marker is never accepted as a boundary, and a capture that reuses a
+4-tuple across connections merges them.
 
-## Repository
+## FAQ
+
+**Which agents can use it?** Any MCP client. `protopath setup --yes` writes `.mcp.json`; Claude
+Code, Cursor and Codex all read that shape or the printed equivalent.
+
+**Do I need Wireshark?** No. The dissector is an output, not a dependency. It exists so the model
+can be checked by a human against live traffic afterwards.
+
+**Does it upload my capture?** No. There is no network call anywhere in the codebase.
+
+**Is the field table a specification?** No. It is a ranked hypothesis with per-field confidence.
+The report prints the runner-up framing and the reassembly damage for exactly this reason.
+
+**Why exit code 3?** So a pipeline can tell "no structure found" apart from "the file would not
+parse". A report that only half-holds should not look like success.
+
+**Does it work on TLS or QUIC?** Not on ciphertext. Decrypt first, or record at the point where
+plaintext exists.
+
+**What is the answer to the benchmark?** There is no benchmark. The fixtures are the honest
+substitute: five protocols with documented layouts, and 39 tests that fail when the inference
+changes.
+
+## Documentation
+
+- [Design](docs/design.md) — the method, the scoring formulas, the failure modes
+- [Capture formats](docs/captures.md) — the five fixture protocols and their ground truth
+- [CLI](#cli) and [MCP tools](#mcp-tools) — the two interfaces to the same analysis
+
+## Development
+
+```console
+$ npm install
+$ npm run captures   # regenerate captures/ deterministically
+$ npm test           # build and run 39 tests
+```
 
 ```
 src/core/pcap/       pcap and pcapng readers
 src/core/net/        link/IP/transport decoding, TCP reassembly
 src/core/infer/      framing, fields, checksums, state graph
-src/core/emit/       Lua dissector, TypeScript/Python clients, mutation harness
+src/core/emit/       Lua dissector, TypeScript and Python clients, mutation harness
 src/core/            pipeline, report, diff
 src/cli/             command line
-src/mcp/             MCP server, stdio
-tests/               unit and end-to-end tests against the fixture captures
+src/mcp/             MCP server over stdio
+tests/               unit and end-to-end tests against the fixtures
 scripts/             fixture capture generator
-docs/                design, capture formats
-```
-
-Development:
-
-```console
-$ npm install
-$ npm run captures   # regenerate captures/ from the generator
-$ npm test           # build and run 39 tests
 ```
 
 ## License

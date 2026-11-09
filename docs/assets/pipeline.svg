@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 300" width="1160" height="300" role="img" aria-label="protopath pipeline: capture, flows, framing hypotheses, field model, checksum search, generated artifacts">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#57606a"/>
+    </marker>
+    <style>
+      .box { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; }
+      .box-accent { fill: #ffffff; stroke: #0969da; stroke-width: 2; }
+      .title { font: 600 15px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0d1117; }
+      .sub { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #57606a; }
+      .note { font: 12px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #57606a; }
+      .link { stroke: #57606a; stroke-width: 1.5; fill: none; }
+    </style>
+  </defs>
+
+  <text x="20" y="30" class="note">one direction of one conversation, start to finish</text>
+
+  <rect class="box" x="20" y="80" width="150" height="90" rx="8"/>
+  <text class="title" x="95" y="114" text-anchor="middle">capture</text>
+  <text class="sub" x="95" y="136" text-anchor="middle">pcap · pcapng</text>
+  <text class="sub" x="95" y="154" text-anchor="middle">eth · ipv4 · ipv6</text>
+
+  <path class="link" d="M 174 125 L 202 125" marker-end="url(#arrow)"/>
+
+  <rect class="box" x="210" y="80" width="150" height="90" rx="8"/>
+  <text class="title" x="285" y="114" text-anchor="middle">reassembly</text>
+  <text class="sub" x="285" y="136" text-anchor="middle">tcp sequence</text>
+  <text class="sub" x="285" y="154" text-anchor="middle">gaps reported</text>
+
+  <path class="link" d="M 364 125 L 392 125" marker-end="url(#arrow)"/>
+
+  <rect class="box-accent" x="400" y="80" width="150" height="90" rx="8"/>
+  <text class="title" x="475" y="114" text-anchor="middle">framing</text>
+  <text class="sub" x="475" y="136" text-anchor="middle">5 families</text>
+  <text class="sub" x="475" y="154" text-anchor="middle">ranked, 1 wins</text>
+
+  <path class="link" d="M 554 125 L 582 125" marker-end="url(#arrow)"/>
+
+  <rect class="box" x="590" y="80" width="150" height="90" rx="8"/>
+  <text class="title" x="665" y="114" text-anchor="middle">field model</text>
+  <text class="sub" x="665" y="136" text-anchor="middle">offset + role</text>
+  <text class="sub" x="665" y="154" text-anchor="middle">+ evidence</text>
+
+  <path class="link" d="M 744 125 L 772 125" marker-end="url(#arrow)"/>
+
+  <rect class="box" x="780" y="80" width="150" height="90" rx="8"/>
+  <text class="title" x="855" y="114" text-anchor="middle">checksum</text>
+  <text class="sub" x="855" y="136" text-anchor="middle">12 algorithms</text>
+  <text class="sub" x="855" y="154" text-anchor="middle">all messages or no</text>
+
+  <path class="link" d="M 934 125 L 962 125" marker-end="url(#arrow)"/>
+
+  <rect class="box" x="970" y="80" width="170" height="90" rx="8"/>
+  <text class="title" x="1055" y="114" text-anchor="middle">artifacts</text>
+  <text class="sub" x="1055" y="136" text-anchor="middle">dissector.lua</text>
+  <text class="sub" x="1055" y="154" text-anchor="middle">client.ts · py · md</text>
+
+  <path class="link" d="M 475 174 L 475 208" marker-end="url(#arrow)"/>
+  <text class="note" x="490" y="204">no confident framing? exit 3, report says so</text>
+
+  <text class="note" x="20" y="250">every finding carries the rule that produced it and the alternative that survives</text>
+</svg>

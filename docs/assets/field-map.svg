@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 260" width="800" height="260" role="img" aria-label="Recovered field map for the example protocol: magic, length, sequence, type, payload, checksum">
+  <defs>
+    <style>
+      .group { font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #ffffff; }
+      .hex { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #0d1117; }
+      .off { font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #57606a; }
+      .cell { fill: #ffffff; stroke: #d0d7de; stroke-width: 1; }
+      .note { font: 12px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #57606a; }
+    </style>
+  </defs>
+
+  <text class="note" x="20" y="24">recovered from 10 messages, kept because it explains every byte</text>
+
+  <rect x="80" y="50" width="76" height="24" rx="4" fill="#0969da"/>
+  <text class="group" x="118" y="67" text-anchor="middle">magic</text>
+
+  <rect x="160" y="50" width="36" height="24" rx="4" fill="#8250df"/>
+  <text class="group" x="178" y="67" text-anchor="middle">len</text>
+
+  <rect x="200" y="50" width="76" height="24" rx="4" fill="#1a7f37"/>
+  <text class="group" x="238" y="67" text-anchor="middle">sequence</text>
+
+  <rect x="280" y="50" width="36" height="24" rx="4" fill="#bc4c00"/>
+  <text class="group" x="298" y="67" text-anchor="middle">type</text>
+
+  <rect x="320" y="50" width="236" height="24" rx="4" fill="#6e7781"/>
+  <text class="group" x="438" y="67" text-anchor="middle">payload (variable)</text>
+
+  <rect x="560" y="50" width="76" height="24" rx="4" fill="#cf222e"/>
+  <text class="group" x="598" y="67" text-anchor="middle">checksum</text>
+
+  <g class="cell">
+    <rect x="80" y="86" width="40" height="34"/>
+    <rect x="120" y="86" width="40" height="34"/>
+    <rect x="160" y="86" width="40" height="34"/>
+    <rect x="200" y="86" width="40" height="34"/>
+    <rect x="240" y="86" width="40" height="34"/>
+    <rect x="280" y="86" width="40" height="34"/>
+    <rect x="320" y="86" width="40" height="34"/>
+    <rect x="360" y="86" width="40" height="34"/>
+    <rect x="400" y="86" width="40" height="34"/>
+    <rect x="440" y="86" width="40" height="34"/>
+    <rect x="480" y="86" width="40" height="34"/>
+    <rect x="520" y="86" width="40" height="34"/>
+    <rect x="560" y="86" width="40" height="34"/>
+    <rect x="600" y="86" width="40" height="34"/>
+  </g>
+
+  <g class="hex" text-anchor="middle">
+    <text x="100" y="108">a5</text>
+    <text x="140" y="108">5a</text>
+    <text x="180" y="108">0e</text>
+    <text x="220" y="108">01</text>
+    <text x="260" y="108">00</text>
+    <text x="300" y="108">10</text>
+    <text x="340" y="108">75</text>
+    <text x="380" y="108">70</text>
+    <text x="420" y="108">74</text>
+    <text x="460" y="108">69</text>
+    <text x="500" y="108">6d</text>
+    <text x="540" y="108">65</text>
+    <text x="580" y="108">db</text>
+    <text x="620" y="108">4b</text>
+  </g>
+
+  <g class="off" text-anchor="middle">
+    <text x="100" y="136">0</text>
+    <text x="140" y="136">1</text>
+    <text x="180" y="136">2</text>
+    <text x="220" y="136">3</text>
+    <text x="260" y="136">4</text>
+    <text x="300" y="136">5</text>
+    <text x="340" y="136">6</text>
+    <text x="380" y="136">7</text>
+    <text x="420" y="136">8</text>
+    <text x="460" y="136">9</text>
+    <text x="500" y="136">10</text>
+    <text x="540" y="136">11</text>
+    <text x="580" y="136">12</text>
+    <text x="620" y="136">13</text>
+  </g>
+
+  <text class="note" x="80" y="176">0xa55a constant in every message · length reproduces total · sequence +1 per message · type has 2 values</text>
+  <text class="note" x="80" y="196">crc16/modbus over bytes [0, 12) equals bytes 12..14 in 10 of 10 messages, little endian</text>
+  <text class="note" x="80" y="226">payload column is ASCII: 75 70 74 69 6d 65 = "uptime"</text>
+</svg>
