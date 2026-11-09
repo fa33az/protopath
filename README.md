@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/fa33az/protopath/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
   <a href="https://github.com/fa33az/protopath/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fa33az/protopath/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-61%20passing-2ea043?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-62%20passing-2ea043?style=flat-square">
   <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A520.19-339933?style=flat-square&logo=node.js&logoColor=white">
   <img alt="mcp" src="https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square">
   <img alt="captures" src="https://img.shields.io/badge/capture-pcap%20%C2%B7%20pcapng-cb3837?style=flat-square">
@@ -483,7 +483,7 @@ plaintext exists. A TLS record layer is still identified when the handshake is v
 
 **What is the answer to the benchmark?** There is no benchmark. The fixtures are the honest
 substitute: seven protocols with documented layouts — six synthetic, one recorded from pymodbus —
-and 61 tests that fail when the inference changes.
+and 62 tests that fail when the inference changes.
 
 ## Documentation
 
@@ -498,7 +498,7 @@ and 61 tests that fail when the inference changes.
 ```console
 $ npm install
 $ npm run captures   # regenerate captures/ deterministically
-$ npm test           # build and run 61 tests
+$ npm test           # build and run 62 tests
 ```
 
 ```
