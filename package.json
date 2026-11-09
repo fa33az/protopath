@@ -1,0 +1,42 @@
+{
+  "name": "protopath",
+  "version": "0.1.0",
+  "description": "Infer wire protocol structure from raw captures, and hand the result to an agent.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "protopath": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:test": "tsc -p tsconfig.tests.json",
+    "captures": "npm run build:test && node dist-test/scripts/make-captures.js",
+    "test": "npm run build:test && node --test \"dist-test/tests/*.test.js\"",
+    "cli": "node dist/cli/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
