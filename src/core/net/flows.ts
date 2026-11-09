@@ -155,11 +155,28 @@ function signedDelta(value: number, reference: number): number {
 }
 
 /** Timestamp of the segment covering a stream offset. */
+/**
+ * Timestamp of the segment that carried the byte at `offset`.
+ *
+ * The segments are ordered by offset, so a binary search replaces the scan. The scan was
+ * quadratic: one full pass over every segment for every message, which on a twenty-thousand
+ * message stream is four hundred million comparisons.
+ */
 export function timestampAt(stream: StreamState, offset: number): number {
-  let best = stream.segments.length > 0 ? stream.segments[0]!.ts : 0;
-  for (const segment of stream.segments) {
-    if (segment.offset > offset) break;
-    best = segment.ts;
+  const segments = stream.segments;
+  if (segments.length === 0) return 0;
+  let low = 0;
+  let high = segments.length - 1;
+  let found = segments[0]!.ts;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const segment = segments[middle]!;
+    if (segment.offset <= offset) {
+      found = segment.ts;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
   }
-  return best;
+  return found;
 }

@@ -5,3 +5,8 @@ out/
 tmp/
 *.tsbuildinfo
 .DS_Store
+bench/profile/
+
+__pycache__/
+*.pyc
+

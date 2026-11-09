@@ -12,7 +12,7 @@ import { fingerprintProtocol, type Fingerprint } from './infer/fingerprint.js';
 import { buildStateGraph, labelMessage, type MessageRecord, type StateGraph } from './infer/state.js';
 import type { Capture, Flow, StreamState } from './types.js';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 
 export interface DirectionAnalysis {
   direction: 'forward' | 'reverse';
@@ -106,14 +106,33 @@ export function analyzeCapture(capture: Capture, options: AnalyzeOptions = {}): 
     throw new Error(`no flow matches "${options.flow}"; run \`protopath flows ${capture.path}\` for the exact keys`);
   }
 
-  const analyzed = candidates
+  // A capture can hold hundreds of conversations, and a full analysis of one costs real time.
+  // Rank by carried bytes first and analyse a shortlist, then rank the shortlist by how much
+  // structure it produced. A conversation with data is more likely to be the interesting one
+  // than a three-byte handshake, and the shortlist is wide enough that a small interesting flow
+  // still makes it.
+  const limit = options.maxFlows ?? 4;
+  const shortlist = [...candidates]
+    .sort((a, b) => flowBytes(b) - flowBytes(a))
+    .slice(0, Math.max(limit * 3, 8));
+
+  const analyzed = shortlist
     .map((flow) => analyzeFlow(flow, capture.path, { deep: false }))
     .sort((a, b) => scoreFlow(b) - scoreFlow(a))
-    .slice(0, options.maxFlows ?? 4);
+    .slice(0, limit);
 
   // The CRC parameter search is a few hundred milliseconds per direction and only pays off on
-  // the conversation the user cares about, so it runs once, on the flow that already won.
-  if (analyzed[0]) analyzed[0] = analyzeFlow(analyzed[0].flow, capture.path, { deep: true });
+  // the conversation the user cares about, so it runs once, on the flow that already won. The
+  // search is skipped entirely when the catalogue already named a checksum, and the winning flow
+  // is only analysed a second time when the search actually recovers something: a full re-analysis
+  // that ends with the same answer is pure cost.
+  if (analyzed[0]) {
+    const winner = analyzed[0];
+    const primary = winner.primary === 'forward' ? winner.forward : winner.reverse;
+    if (primary.best && primary.checksums.length === 0 && recoverCrc(primary.best.messages).length > 0) {
+      analyzed[0] = analyzeFlow(winner.flow, capture.path, { deep: true });
+    }
+  }
 
   const partial = analyzed.filter((a) => {
     const direction = a.primary === 'forward' ? a.forward : a.reverse;
@@ -292,6 +311,10 @@ function analyzeDirection(flow: Flow, direction: 'forward' | 'reverse', options:
     notes,
     limitations,
   };
+}
+
+function flowBytes(flow: Flow): number {
+  return flow.forward.data.length + flow.reverse.data.length;
 }
 
 function scoreFlow(analysis: FlowAnalysis): number {

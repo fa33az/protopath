@@ -1,0 +1,22 @@
+[
+  {
+    "file": "real-mqtt.pcap",
+    "protocol": "MQTT 3.1.1 (amqtt broker, paho-mqtt client)",
+    "basis": "OASIS MQTT 3.1.1, fixed header and remaining length",
+    "transport": "tcp",
+    "framing": { "kind": "length-prefix", "lenOffset": 1, "size": 1, "endian": "be", "bias": 2 },
+    "checksum": null,
+    "family": "MQTT",
+    "note": "the remaining length is a variable-length integer; modelled as one byte per short message, which is exact until a message passes 127 bytes"
+  },
+  {
+    "file": "real-http.pcap",
+    "protocol": "HTTP/1.1 (http.server, http.client)",
+    "basis": "RFC 9112",
+    "transport": "tcp",
+    "framing": { "kind": "delimiter", "terminator": "0a" },
+    "checksum": null,
+    "family": "HTTP/1.x",
+    "note": "known approximation: the tool frames line-oriented text at the line, not at the request; the family label says which unit the lines belong to"
+  }
+]

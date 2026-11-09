@@ -1,6 +1,6 @@
 {
   "name": "protopath-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Infer wire protocol structure from a pcap or pcapng capture: framing, fields, counters, checksums. MCP server, Wireshark dissector, TypeScript and Python clients.",
   "license": "MIT",
   "type": "module",
@@ -54,9 +54,13 @@
     "build": "tsc -p tsconfig.json",
     "build:test": "tsc -p tsconfig.tests.json",
     "captures": "npm run build:test && node dist-test/scripts/make-captures.js",
+    "bench:corpus": "npm run build:test && node dist-test/bench/make-bench.js",
+    "bench": "npm run build && node scripts/benchmark.mjs",
     "test": "npm run build:test && node scripts/run-tests.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
     "cli": "node dist/cli/index.js",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run build && npm run check:docs && npm test",
+    "profile": "npm run build:test && node scripts/profile.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

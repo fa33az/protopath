@@ -51,7 +51,9 @@ const PRIOR: Record<FramingKind, number> = {
   'length-prefix': 0.92,
   'start-marker': 0.86,
   delimiter: 0.8,
-  fixed: 0.55,
+  // Fixed size is a guess: any stream length has divisors. It is reported, but it does not
+  // clear the confidence bar on its own, so no field model is built on it.
+  fixed: 0.5,
   unframed: 0.2,
 };
 
@@ -80,6 +82,8 @@ export function inferFraming(stream: Buffer, options: { maxHypotheses?: number }
     limitations: ['field inference below is not meaningful for an unframed stream'],
   });
 
+  applyMarkerConsistency(results, stream);
+
   const bestByShape = new Map<string, FramingHypothesis>();
   for (const hypothesis of results) {
     const shape = shapeKey(hypothesis);
@@ -98,6 +102,108 @@ export function inferFraming(stream: Buffer, options: { maxHypotheses?: number }
     });
 
   return ranked.slice(0, options.maxHypotheses ?? 4);
+}
+
+/**
+ * A repeated byte sequence that divides the stream into messages is evidence the stream has
+ * boundaries there. A length-prefix parse that ignores most of those boundaries has found a
+ * tiling, not the framing. Penalise it so the marker-based parse wins.
+ */
+function applyMarkerConsistency(results: FramingHypothesis[], stream: Buffer): void {
+  const marker = results
+    .filter((h) => h.kind === 'start-marker' && h.startMarker !== undefined && h.messages.length >= 3 && h.score >= 0.8)
+    .sort((a, b) => b.score - a.score)[0];
+  if (!marker?.startMarker) return;
+
+  const bytes = marker.startMarker.marker;
+  const positions: number[] = [];
+  for (let at = stream.indexOf(bytes); at !== -1; at = stream.indexOf(bytes, at + 1)) positions.push(at);
+  if (positions.length < 3) return;
+
+  for (const hypothesis of results) {
+    if (hypothesis.kind !== 'length-prefix') continue;
+    const boundaries = new Set(hypothesis.offsets);
+    const aligned = positions.filter((position) => boundaries.has(position)).length;
+    const missed = (positions.length - aligned) / positions.length;
+    if (missed === 0) continue;
+    // Each marker occurrence is a boundary under the competing parse. Any occurrence this parse
+    // treats as payload is evidence the parse found a tiling, not the framing. The penalty is
+    // proportional, so a marker byte that happens to occur inside one payload only costs a little.
+    hypothesis.score = clamp01(hypothesis.score - 0.3 * missed);
+    hypothesis.evidence.push(
+      `the marker 0x${bytes.toString('hex')} occurs ${positions.length} times in the stream, but only ${aligned} of those positions are message boundaries under this parse`,
+    );
+    hypothesis.limitations.push(
+      'a competing start-marker parse explains the repeated marker at every occurrence; this length parse treats some of them as payload',
+    );
+  }
+
+  // A start marker that keeps swallowing the next message is not a marker, it is a marker plus
+  // data. Its first two bytes usually occur far more often than the wider marker does; when that
+  // happens, the wider marker is a restriction of the narrower one and must lose to it.
+  for (const hypothesis of results) {
+    if (hypothesis.kind !== 'start-marker' || !hypothesis.startMarker) continue;
+    const wider = hypothesis.startMarker.marker;
+    if (wider.length < 3) continue;
+    const narrower = wider.subarray(0, 2);
+    const occurrences: number[] = [];
+    for (let at = stream.indexOf(narrower); at !== -1; at = stream.indexOf(narrower, at + 1)) occurrences.push(at);
+    if (occurrences.length < 6) continue;
+    const starts = new Set(hypothesis.offsets);
+    const aligned = occurrences.filter((position) => starts.has(position)).length;
+    const missed = (occurrences.length - aligned) / occurrences.length;
+    if (missed < 0.5) continue;
+    hypothesis.score = clamp01(hypothesis.score - 0.35 * missed);
+    hypothesis.evidence.push(
+      `0x${narrower.toString('hex')} occurs ${occurrences.length} times but only ${aligned} of those positions start one of these messages`,
+    );
+    hypothesis.limitations.push(
+      'most occurrences of the first two marker bytes fall inside these messages, so the wider marker is a restriction of a shorter one',
+    );
+  }
+}
+
+/**
+ * Does the parse show a second regularity besides its own length field?
+ *
+ * A tiling only proves that the byte under the length field happened to walk to the end of the
+ * buffer; a random stream does that about once in a hundred hypotheses. A real protocol almost
+ * always leaves another trace in its header: a constant magic or a type byte drawn from a small
+ * set, or a counter that steps by a fixed amount. That second regularity is independent evidence,
+ * and without it a length-prefix claim is a coincidence with a confident voice.
+ */
+function hasStructuralColumn(messages: Buffer[]): boolean {
+  if (messages.length < 3) return false;
+  const shortest = Math.min(...messages.map((message) => message.length));
+  const width = Math.min(shortest, 24);
+  const allowed = Math.max(2, Math.ceil(messages.length * 0.5));
+  let columns = 0;
+
+  for (let position = 0; position < width; position++) {
+    const values = messages.map((message) => message[position]!);
+    if (new Set(values).size <= allowed) {
+      // One column is a coincidence of the sample; two independent regularities are structure.
+      // A random buffer produces two such columns about once in a million parses; a real header
+      // produces them because a magic, a type, a length high byte and a counter all sit there.
+      if (++columns >= 2) return true;
+      continue;
+    }
+
+    // A counter: distinct values that step by the same non-zero amount, in message order.
+    let step: number | undefined;
+    let arithmetic = values.length >= 4;
+    for (let i = 1; i < values.length && arithmetic; i++) {
+      const delta = values[i]! - values[i - 1]!;
+      if (delta === 0) {
+        arithmetic = false;
+        break;
+      }
+      if (step === undefined) step = delta;
+      else if (step !== delta) arithmetic = false;
+    }
+    if (arithmetic && new Set(values).size >= 3 && ++columns >= 2) return true;
+  }
+  return false;
 }
 
 export function shapeKey(hypothesis: FramingHypothesis): string {
@@ -125,6 +231,7 @@ function readValue(data: Buffer, at: number, size: 1 | 2 | 4, endian: Endian): n
 function lengthPrefixHypotheses(stream: Buffer): FramingHypothesis[] {
   const out: FramingHypothesis[] = [];
   const maxLenOffset = Math.min(8, stream.length - 2);
+  const streamPrintable = printableShare(stream);
 
   for (let lenOffset = 0; lenOffset <= maxLenOffset; lenOffset++) {
     for (const size of [1, 2, 4] as const) {
@@ -138,8 +245,14 @@ function lengthPrefixHypotheses(stream: Buffer): FramingHypothesis[] {
           const count = segmentation.messages.length;
           if (count < 3) continue;
 
-          const small = segmentation.messages.reduce((n, m) => n + (m.length < Math.max(4, lenOffset + size) ? 1 : 0), 0);
-          if (small > 0) continue;
+          // The smallest legal message is the length field itself. A parse that needs two-byte
+          // messages is not automatically wrong — MQTT's DISCONNECT is exactly two bytes — but a
+          // parse made mostly of them is tiling the stream with whatever byte value came next.
+          // Penalise the share instead of rejecting the hypothesis.
+          const minimumMessage = Math.max(4, lenOffset + size);
+          const tiny = segmentation.messages.reduce((n, m) => n + (m.length < minimumMessage ? 1 : 0), 0);
+          const tinyShare = tiny / segmentation.messages.length;
+          if (segmentation.messages.some((m) => m.length < lenOffset + size)) continue;
 
           const values = segmentation.offsets.map((offset) => readValue(stream, offset + lenOffset, size, endian));
           const distinctValues = new Set(values).size;
@@ -153,15 +266,44 @@ function lengthPrefixHypotheses(stream: Buffer): FramingHypothesis[] {
           // by accident: most boundaries are "0 + bias". Avoid the byte when it carries no
           // information in the majority of messages.
           const uninformativeField = zeroShare > 0.5;
+          // In a stream that is nothing but printable text, a length field made of printable
+          // bytes is an ASCII character that happened to tile the stream. Check the field's
+          // bytes, not its numeric value: a 4-byte big-endian 44 is 00 00 00 2c, four bytes of
+          // which only one is printable. The message starts must be printable too: a binary
+          // header followed by a text body is ordinary, and its length field is binary.
+          let printableFieldBytes = 0;
+          let fieldBytes = 0;
+          for (const offset of segmentation.offsets) {
+            for (let i = 0; i < size; i++) {
+              const byte = stream[offset + lenOffset + i]!;
+              fieldBytes++;
+              if (byte >= 0x20 && byte <= 0x7e) printableFieldBytes++;
+            }
+          }
+          const printableStarts =
+            segmentation.offsets.filter((offset) => {
+              const byte = stream[offset]!;
+              return byte >= 0x20 && byte <= 0x7e;
+            }).length / segmentation.offsets.length;
+          const printableLength =
+            streamPrintable >= 0.92 && printableStarts >= 0.5 && fieldBytes > 0 && printableFieldBytes / fieldBytes >= 0.5;
+
+          // Each message boundary is one prediction that the length field made and the stream
+          // confirmed. Three predictions are not evidence: a random stream tiles into three
+          // chunks often enough to matter.
+          const corroborated = hasStructuralColumn(segmentation.messages);
 
           const score =
             PRIOR['length-prefix'] -
             0.025 * Math.min(Math.abs(bias), 8) -
             0.015 * lenOffset +
             (size === 2 ? 0.02 : 0) +
-            (count >= 6 ? 0.02 : 0) -
+            (count >= 4 ? 0.02 : -0.1 * (4 - count)) -
             (constantField ? 0.2 : 0) -
-            (uninformativeField ? 0.22 : 0);
+            (uninformativeField ? 0.22 : 0) -
+            (printableLength ? 0.3 : 0) -
+            0.35 * tinyShare +
+            (corroborated ? 0.06 : -0.36);
 
           out.push({
             kind: 'length-prefix',
@@ -183,6 +325,12 @@ function lengthPrefixHypotheses(stream: Buffer): FramingHypothesis[] {
                 : []),
               ...(uninformativeField
                 ? [`the length field was zero in ${Math.round(zeroShare * 100)}% of messages; those sizes come from the bias, not the field`]
+                : []),
+              ...(printableLength
+                ? ['the stream is printable text and the length byte is printable too, so this parse may be a coincidence of ASCII values rather than a declared field']
+                : []),
+              ...(tinyShare > 0
+                ? [`${tiny} of ${segmentation.messages.length} messages are shorter than the length field plus one byte; a parse made of such fragments is usually a tiling rather than a framing`]
                 : []),
             ],
           });
@@ -211,7 +359,9 @@ function dedupeBySegmentation(hypotheses: FramingHypothesis[], stream: Buffer): 
       best.set(signature, hypothesis);
       continue;
     }
-    if (isPreferredLengthField(hypothesis.lengthPrefix!, existing.lengthPrefix!)) best.set(signature, hypothesis);
+    if (isPreferredLengthField(hypothesis.lengthPrefix!, existing.lengthPrefix!)) {
+      best.set(signature, hypothesis);
+    }
   }
   void stream;
   return [...best.values()];
@@ -219,6 +369,17 @@ function dedupeBySegmentation(hypotheses: FramingHypothesis[], stream: Buffer): 
 
 const WIDTH_PRIOR: Record<1 | 2 | 4, number> = { 2: 0, 1: 1, 4: 2 };
 
+/**
+ * Chooses between two length specs that segment the stream identically.
+ *
+ * Identical segmentation means both describe the same boundaries, so the choice is about which
+ * field a reader should see. The narrowest width wins, because a wider field that merely contains
+ * a narrower one (its high bytes always zero in this capture) cannot be distinguished from the
+ * narrower field on the evidence available: a four-byte length and a two-byte protocol id
+ * followed by a two-byte length produce the same bytes. That ambiguity is reported as a
+ * limitation rather than resolved by guesswork; it disappears as soon as a message is long
+ * enough for the high bytes to move.
+ */
 function isPreferredLengthField(candidate: LengthPrefixSpec, incumbent: LengthPrefixSpec): boolean {
   if (candidate.size !== incumbent.size) return WIDTH_PRIOR[candidate.size] < WIDTH_PRIOR[incumbent.size];
   if (Math.abs(candidate.bias) !== Math.abs(incumbent.bias)) return Math.abs(candidate.bias) < Math.abs(incumbent.bias);
@@ -424,12 +585,16 @@ function fixedHypotheses(stream: Buffer): FramingHypothesis[] {
 }
 
 function isMostlyPrintable(message: Buffer): boolean {
-  if (message.length === 0) return false;
+  return printableShare(message) >= 0.85;
+}
+
+function printableShare(data: Buffer): number {
+  if (data.length === 0) return 0;
   let printable = 0;
-  for (const byte of message) {
+  for (const byte of data) {
     if ((byte >= 0x20 && byte <= 0x7e) || byte === 0x09 || byte === 0x0a || byte === 0x0d) printable++;
   }
-  return printable / message.length >= 0.85;
+  return printable / data.length;
 }
 
 function median(values: number[]): number {

@@ -19,8 +19,17 @@ Input: the reassembled byte stream of one direction.
 
 The enumerator produces candidate segmentations. A candidate is kept only if it splits the
 stream into at least three messages and consumes it exactly — the final message must end on the
-last byte. That single rule discards most wrong frame lengths, because an incorrect length that
-happens to fit the first message will not land on the end of the buffer.
+last byte.
+
+Exact consumption alone is weak evidence, and this was measured rather than assumed: on random
+buffers, "explains every byte" cleared a naive confidence bar in 16 of 40 cases. A random walk whose
+step is a byte value lands exactly on the buffer end about once per hundred hypotheses, and the
+search tries a thousand hypotheses per stream. So a length-prefix candidate must also show a second
+regularity that the length field cannot produce by itself: at least two byte columns in the message
+headers that are constant, drawn from a small set, or a counter stepping by a fixed amount. Random
+data supplies those about once in a million parses; a real header supplies them because a magic, a
+type, a length high byte and a counter all sit there. Without that corroboration the candidate loses
+0.36, which puts it below the confidence bar while still listing it as a runner-up.
 
 **Length-prefixed.** For every combination of:
 
@@ -33,34 +42,54 @@ the stream is walked and segmented. The bias collapses the usual variants (`leng
 itself, includes the header, excludes the trailer) into one parameter.
 
 Score:
-`0.92 - 0.025·min(|bias|, 8) - 0.015·offset (+0.02 for 16-bit, +0.02 for 6+ messages)
-− 0.20 if the field never varied − 0.22 if it was zero in more than half the messages`
+`0.92 - 0.025·min(|bias|, 8) - 0.015·offset (+0.02 for 16-bit, +0.02 for 4+ messages)
+− 0.20 if the field never varied − 0.22 if it was zero in more than half the messages
+− 0.30 if the stream and the field are printable text − 0.35·(share of messages under four bytes)
++ 0.06 if the header shows a structural column, − 0.36 if it does not`
 
-The two penalties exist because of a real capture. MBAP headers are full of `0x00` bytes, so a
-1-byte "length" at offset 0 with bias +4 happily tiles a Modbus stream into four-byte messages.
-A length field that never varies is fixed-size framing with an extra claim attached; a length
-field that is zero in most messages is a constant byte plus a bias. Neither is evidence of
-length-prefixed framing, and both are demoted rather than silently accepted.
+The penalties exist because of real captures. MBAP headers are full of `0x00` bytes, so a 1-byte
+"length" at offset 0 with bias +4 happily tiles a Modbus stream into four-byte messages: a length
+field that never varies is fixed-size framing with an extra claim attached, and a length field that
+is zero in most messages is a constant byte plus a bias. Syslog over UDP is printable text in which
+any ASCII byte can act as a length, and a one-byte length that is itself a printable character is
+demoted. MQTT's DISCONNECT is two bytes, so a parse made of tiny fragments is penalised by share
+rather than rejected — one legitimate short message must not hide the framing, a stream of them is
+a tiling.
 
 When two parameterisations produce the same boundaries — a 2-byte length at offset 4 and a
 4-byte length at offset 2 are indistinguishable when the bytes between them are a constant zero
-— the tie breaks on a width prior: 16-bit, then 8-bit, then 32-bit. The data cannot settle it;
-the prior decides, and the report says so by listing the alternatives.
+— the tie breaks toward the narrowest field: 16-bit, then 8-bit, then 32-bit. The data cannot
+settle it; the prior decides, and the report says so by listing the alternatives. The benchmark
+measures the consequence: five of twenty framing checks report a field narrower than the
+specification, with byte-identical boundaries.
 
 **Start-marker.** Markers are the first 2, 3 and 4 bytes of the stream. The stream is split at
 every occurrence and the marker must begin every message. All-zero and all-`0xff` markers are
 rejected: they are padding runs, not boundaries. Nested markers (`aa55` and `aa5503`) produce
 identical segmentations; only the shortest is kept, and longer ones lose 0.02 per extra byte.
 
+A wider marker is also checked against its own first two bytes. If those occur far more often than
+the wider marker starts messages, the wider marker is a marker plus data: on a capture whose header
+was `a5 5a` plus a length byte, the three-byte `a5 5a 1f` appeared only for one message length and
+swallowed forty-eight messages at a time, scoring higher than the real two-byte marker. The fix is
+proportional: the hypothesis loses `0.35 × share of first-two-byte occurrences that are not message
+starts`.
+
 Score: `0.86 - 0.2 if any message < 6 bytes, - 0.02·(width - 2)`.
+
+A length-prefix parse is checked against every competing marker: each occurrence of the marker is a
+boundary under the marker parse, and any occurrence the length parse treats as payload costs
+`0.3 × share missed`. Two parses that both explain every byte cannot be separated by coverage; the
+repeated marker is the evidence that one of them dropped a boundary.
 
 **Delimiter.** `0a`, `0d0a`, `0d`, `00`, `0000`, `ff`, `03`. Split after every terminator; a
 short trailing residue rejects the hypothesis. Score `0.80`, `+0.06` when at least 90% of
 messages are printable text.
 
 **Fixed.** Every divisor of the stream length between 4 and 1024. Weakest family; score starts
-at `0.55`. Only the two best fixed hypotheses are reported, because divisors of any length
-produce a crowd of them.
+at `0.50`, and `+0.08` for a plausible size puts it at `0.58`, below the confidence bar. Any
+stream length has divisors, so a fixed-size claim is reported as a hypothesis and never used to
+build a field model on its own. Only the two best fixed hypotheses are reported.
 
 **Unframed.** Always present at `0.20` so the ranking has a floor and the report can say "no
 boundary was found" rather than failing.
@@ -130,7 +159,7 @@ the report prints them for exactly this reason.
 
 Input: the messages, unmodified.
 
-Twenty-six algorithms across three widths:
+Thirty algorithms across three widths:
 
 ```
 8-bit   sum8  xor8  crc8  crc8/itu  crc8/rohc  crc8/maxim  crc8/darc
@@ -150,6 +179,16 @@ end), covered range start (`0..8`), and endianness. Because the catalogue is now
 pass runs on a spread sample of at most 32 messages; every survivor is then re-verified on the
 whole direction, and the reported agreement is over all messages. A candidate is reported only
 when it matches at least 95% of messages — in practice a real checksum matches 100%.
+
+Three rules keep a coincidence out of the report:
+
+- **Six messages minimum.** Five equal-length messages whose bodies xor to zero produce a perfect
+  `xor8` match on the byte outside the range. That is arithmetic, not a protocol.
+- **The check field must vary.** A constant trailer byte is not a checksum; it is a delimiter or a
+  terminator that a weak algorithm over a fixed range happened to reproduce.
+- **Abandon early.** A candidate that misses more than 5% of the sample is dropped while hashing,
+  not after. On a flow of kilobyte messages this is the difference between twelve seconds and
+  one: a wrong candidate usually dies on its first message.
 
 **Symptom:** a checksum that is real but computed over a range starting past byte 8 is not found.
 It appears as no candidate rather than a wrong one.
@@ -253,6 +292,34 @@ when one exists, otherwise from direction and a length bucket. Consecutive label
 
 This is a first-order Markov graph, not a grammar. It finds handshakes and reveals which response
 follows which request. It cannot tell you that a field must be `0x02` before `0x10` is legal.
+
+## Cost
+
+Measured with `npm run profile` on two synthetic captures of 20 000 frames: one stream of 20 000
+messages, and two hundred flows of one hundred messages each.
+
+| Stage | single stream | many flows |
+|---|---|---|
+| load and decode | 0.15 s | 0.09 s |
+| group into flows | 0.13 s | 0.09 s |
+| one flow | 2.3 s | 0.03 s |
+| whole capture (four flows) | 2.3 s | 0.37 s |
+
+Three stages were quadratic or duplicated and are not any more:
+
+- `timestampAt` scanned every segment for every message — 400 million comparisons on a
+  twenty-thousand-message stream. It is a binary search over the segment table.
+- `analyzeCapture` analysed every flow and then kept four. Candidates are now ranked by carried
+  bytes and a shortlist is analysed, so a two-hundred-conversation capture does not pay for two
+  hundred analyses.
+- The winning flow was analysed a second time to run CRC recovery, even when recovery found
+  nothing. The second pass now runs only when the search actually recovers a parameter set.
+
+What remains is per-message work: hashing the checksum sample, copying message slices, labelling.
+No algorithm is super-linear any more, and a native rewrite would mean a second implementation of
+every rule above. The measured ceiling is about 0.7 MB/s of payload; a 100 MB capture takes roughly
+two and a half minutes. For a file a person opens in a terminal that is ample, so the answer to
+"should this be Rust" is not yet.
 
 ## Failure modes, by symptom
 

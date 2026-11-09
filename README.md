@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/fa33az/protopath/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
   <a href="https://github.com/fa33az/protopath/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fa33az/protopath/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-62%20passing-2ea043?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-75%20passing-2ea043?style=flat-square">
   <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A520.19-339933?style=flat-square&logo=node.js&logoColor=white">
   <img alt="mcp" src="https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square">
   <img alt="captures" src="https://img.shields.io/badge/capture-pcap%20%C2%B7%20pcapng-cb3837?style=flat-square">
@@ -130,7 +130,7 @@ becomes `length`, a low-cardinality byte becomes `type`, and the rest is `payloa
 are searched before byte-level grouping, because a two-byte little-endian counter otherwise looks
 like a constant byte followed by a stepping one.
 
-**Checksums are enumerated, not guessed.** Twenty-six algorithms across widths 1, 2 and 4, every
+**Checksums are enumerated, not guessed.** Thirty algorithms across widths 1, 2 and 4, every
 field position, every covered range, re-verified on every message.
 
 **When nothing named matches, the parameters are solved.** CRC is affine in its input, so two
@@ -229,6 +229,39 @@ Read the full method, including the scoring formulas and the symptom-to-cause ta
 | RESP | single-byte type prefix on 95% of messages |
 
 Every family needs at least two independent signals; four or more scores 0.95.
+
+---
+
+## Benchmark
+
+Twelve captures the inference code was never developed against: ten written from published wire
+formats, two recorded from libraries that do not appear in the test suite. The ground truth is a
+manifest written by the generator before the tool runs, and `npm run bench` fails when the output
+disagrees with it.
+
+| Protocol | Framing expected | Result |
+|---|---|---|
+| DNS over TCP | 2-byte big-endian length | exact |
+| PostgreSQL v3 | 4-byte length after a type byte | boundaries exact, field narrower |
+| RADIUS | 2-byte length at offset 2 | exact |
+| Kafka Metadata v9 | 4-byte size, does not count itself | boundaries exact |
+| STOMP 1.2 | NUL terminator | exact |
+| HL7 v2 over MLLP | `0x0b` start marker | exact |
+| UBX (u-blox) | `b5 62` sync, `CK_A` byte sum | exact, checksum found |
+| CoAP, Syslog | no framing to claim | silence, correctly |
+| MQTT (amqtt + paho) | one-byte remaining length | exact; family named MQTT |
+| HTTP/1.1 (stdlib) | line framing | exact; family named HTTP/1.x |
+
+```
+framing   true positives 20  false positives 0  false negatives 0
+checksum  true positives 3   false positives 0  false negatives 0
+family    true positives 2   false positives 0  false negatives 0
+```
+
+The corpus was written to be failed, and it was: seven inference rules were wrong, including a
+three-byte marker swallowing forty-eight messages, a checksum invented from a constant trailer, and
+random buffers clearing the confidence bar 16 times in 40. Each fix is recorded with the symptom
+that produced it in [docs/benchmark.md](docs/benchmark.md).
 
 ---
 
@@ -453,10 +486,15 @@ Exit codes: `0` confident analysis · `1` error · `3` no hypothesis cleared the
 | `init` marked ambiguous | every message has the same length, so init and xorout are interchangeable | capture a message with a different body length |
 | 32-bit CRC with a private polynomial | recovery enumerates 2^15 polynomials for width 16, 2^31 for width 32 | try the catalogue first; it carries four 32-bit algorithms |
 | A field boundary off by one | a header byte varies too much to classify | inspect the four hex messages the report prints |
+| Length field reported narrower than the spec | every message is short enough that the high bytes never move, so a 4-byte length and its low half are byte-identical | capture a message above 64 KB and the wider field separates itself |
+| A varint length read as one byte | MQTT's remaining length is a variable-length integer; one byte is exact only below 128 | captures with a message over 127 bytes will mis-frame; the fingerprint still names MQTT |
+| HTTP framed at the line | the tool models line-oriented text by its line terminator, not by request | the family label says which unit the lines belong to |
+| No checksum claimed on a short capture | fewer than six messages is not enough to separate a trailer from a coincidence | record more exchanges |
+| A length-prefixed protocol reported without confidence | the header shows no second regularity (no magic, type set or counter) | a longer capture or both directions usually supplies one |
 
 Also: a single-byte start marker is never accepted as a boundary, a capture that reuses a 4-tuple
-across connections merges them, and the deep recovery pass runs on one flow per capture so a
-many-conversation file stays fast.
+across connections merges them, and only the largest flows are analysed when a capture holds many
+conversations — name one with `--flow` to force it.
 
 ## FAQ
 
@@ -481,13 +519,20 @@ parse". A report that only half-holds should not look like success.
 **Does it work on TLS or QUIC?** Not on ciphertext. Decrypt first, or record at the point where
 plaintext exists. A TLS record layer is still identified when the handshake is visible.
 
-**What is the answer to the benchmark?** There is no benchmark. The fixtures are the honest
-substitute: seven protocols with documented layouts — six synthetic, one recorded from pymodbus —
-and 62 tests that fail when the inference changes.
+**What is the answer to the benchmark?** Twelve captures the inference code was never developed
+against: ten written from specifications and two recorded from libraries that never appear in the
+test suite. The manifest states the expected framing, checksum and family before the tool runs, and
+`npm run bench` fails when the output disagrees with it. The current score is 20/20 framing claims,
+3/3 checksums, 2/2 families, with no false positives; the run also found seven defects in the
+inference rules, all listed in [the benchmark document](docs/benchmark.md#what-the-benchmark-changed).
+
+The fixtures are the other half: six protocols with documented layouts — five synthetic, one
+recorded from pymodbus — and 75 tests that fail when the inference changes.
 
 ## Documentation
 
 - [Design](docs/design.md) — the method, the scoring formulas, the failure modes
+- [Benchmark](docs/benchmark.md) — twelve unseen protocols, the score, and the defects they found
 - [CRC recovery](docs/crc-recovery.md) — the algebra, the ambiguity, and a fixture that proves it
 - [Modbus showcase](docs/showcase-modbus.md) — a real capture, and the three defects it exposed
 - [Capture formats](docs/captures.md) — the seven fixture protocols and their ground truth
@@ -498,7 +543,9 @@ and 62 tests that fail when the inference changes.
 ```console
 $ npm install
 $ npm run captures   # regenerate captures/ deterministically
-$ npm test           # build and run 62 tests
+$ npm test           # build and run 75 tests
+$ npm run bench      # score the inference against the unseen-protocol corpus
+$ npm run profile    # time each stage on a capture larger than the fixtures
 ```
 
 ```

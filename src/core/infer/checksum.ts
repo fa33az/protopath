@@ -242,9 +242,17 @@ export function detectChecksum(messages: Buffer[], options: ChecksumSearchOption
   const minAgreement = options.minAgreement ?? 0.95;
   const sampleSize = options.sampleSize ?? 32;
   const usable = messages.filter((m) => m.length >= 4);
-  if (usable.length < 3) return [];
+  // Five messages are not evidence: a narrow checksum over a fixed-length message can reproduce
+  // a constant byte by coincidence (xor8 over a frame that xors to zero equals the one byte left
+  // outside the range). Six messages with varying content is the smallest set that has been
+  // observed to separate a real trailer from that coincidence.
+  if (usable.length < 6) return [];
 
   const probe = sample(usable, sampleSize);
+  // A candidate is allowed this many misses before it is abandoned. Checking the count while
+  // hashing is what keeps the search cheap: a wrong candidate usually dies on its first or second
+  // message instead of hashing the whole sample, and the sample can hold messages of a kilobyte.
+  const allowedMisses = Math.floor(probe.length * (1 - minAgreement));
   const preliminary: Array<Omit<ChecksumMatch, 'evidence' | 'matches' | 'total' | 'confidence'>> = [];
 
   for (const algorithm of ALGORITHMS) {
@@ -254,12 +262,17 @@ export function detectChecksum(messages: Buffer[], options: ChecksumSearchOption
         for (const endian of ['le', 'be'] as const) {
           let hits = 0;
           let considered = 0;
+          let misses = 0;
           for (const message of probe) {
             const fieldStart = message.length - offsetFromEnd - width;
             if (fieldStart <= rangeStart) continue;
             considered++;
             const expected = readWidth(message, fieldStart, width, endian);
-            if (algorithm.compute(message.subarray(rangeStart, fieldStart)) === expected) hits++;
+            if (algorithm.compute(message.subarray(rangeStart, fieldStart)) === expected) {
+              hits++;
+            } else if (++misses > allowedMisses) {
+              break;
+            }
           }
           if (considered < 3 || hits / considered < minAgreement) continue;
           preliminary.push({ algorithm: algorithm.name, width, endian, offsetFromEnd, rangeStart });
@@ -273,15 +286,22 @@ export function detectChecksum(messages: Buffer[], options: ChecksumSearchOption
     const algorithm = algorithmByName(candidate.algorithm)!;
     let hits = 0;
     let considered = 0;
+    const observed = new Set<number>();
     for (const message of usable) {
       const fieldStart = message.length - candidate.offsetFromEnd - candidate.width;
       if (fieldStart <= candidate.rangeStart) continue;
       considered++;
-      if (algorithm.compute(message.subarray(candidate.rangeStart, fieldStart)) === readWidth(message, fieldStart, candidate.width, candidate.endian)) {
+      const field = readWidth(message, fieldStart, candidate.width, candidate.endian);
+      observed.add(field);
+      if (algorithm.compute(message.subarray(candidate.rangeStart, fieldStart)) === field) {
         hits += 1;
       }
     }
     if (considered < 3 || hits / considered < minAgreement) continue;
+    // A field that never changes is not a checksum: it is a constant trailer byte that a weak
+    // algorithm over a fixed range happened to reproduce. Five messages of equal length are
+    // enough for that coincidence, and the check values carry no information about the data.
+    if (observed.size < 2) continue;
     verified.push({
       ...candidate,
       matches: hits,

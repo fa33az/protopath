@@ -35,11 +35,24 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Check documentation against the code
+        run: npm run check:docs
+
       - name: Verify the fixture captures regenerate byte for byte
         if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
         run: |
           npm run captures
           git diff --exit-code captures/
+
+      - name: Verify the benchmark corpus regenerates byte for byte
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        run: |
+          npm run bench:corpus
+          git diff --exit-code bench/corpus/
+
+      - name: Benchmark against protocols the inference was not developed on
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        run: node scripts/benchmark.mjs
 
       - name: Verify the package contents
         if: matrix.os == 'ubuntu-latest' && matrix.node == '24'

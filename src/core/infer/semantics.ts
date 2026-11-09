@@ -81,10 +81,21 @@ export interface Semantics {
 const PRINTABLE = (byte: number): boolean =>
   (byte >= 0x20 && byte <= 0x7e) || byte === 0x09 || byte === 0x0a || byte === 0x0d;
 
+/**
+ * Reads an integer of any width, in either byte order.
+ *
+ * Field inference can produce widths other than 1, 2 and 4 — a 24-bit counter is ordinary in
+ * binary protocols — so the read is a loop rather than a dispatch over Buffer's fixed-width
+ * helpers. Widths above six bytes lose precision as a JavaScript number, which the field table
+ * would show as a rounded value rather than a hidden truncation.
+ */
 function readInt(message: Buffer, at: number, width: number, endian: 'le' | 'be'): number {
-  if (width === 1) return message[at]!;
-  if (width === 2) return endian === 'le' ? message.readUInt16LE(at) : message.readUInt16BE(at);
-  return endian === 'le' ? message.readUInt32LE(at) : message.readUInt32BE(at);
+  let value = 0;
+  for (let i = 0; i < width; i++) {
+    const byte = message[at + (endian === 'le' ? i : width - 1 - i)]!;
+    value = value * 256 + byte;
+  }
+  return value;
 }
 
 function hex(value: number, width: number): string {

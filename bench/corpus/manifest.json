@@ -1,0 +1,437 @@
+[
+  {
+    "file": "dns-tcp.pcap",
+    "protocol": "DNS over TCP",
+    "basis": "RFC 1035 section 4.2.2, RFC 7766",
+    "transport": "tcp",
+    "framing": {
+      "kind": "length-prefix",
+      "lenOffset": 0,
+      "size": 2,
+      "endian": "be",
+      "bias": 2
+    },
+    "checksum": null,
+    "note": "a two-byte length prefixes each DNS message on a stream connection",
+    "directions": {
+      "forward": {
+        "messages": 10,
+        "lengths": [
+          41,
+          35,
+          40,
+          48,
+          40,
+          36,
+          36,
+          36,
+          39,
+          38
+        ]
+      },
+      "reverse": {
+        "messages": 10,
+        "lengths": [
+          57,
+          51,
+          56,
+          64,
+          56,
+          52,
+          52,
+          52,
+          55,
+          54
+        ]
+      }
+    }
+  },
+  {
+    "file": "postgres-v3.pcap",
+    "protocol": "PostgreSQL v3",
+    "basis": "PostgreSQL frontend/backend message format",
+    "transport": "tcp",
+    "framing": {
+      "kind": "length-prefix",
+      "lenOffset": 1,
+      "size": 4,
+      "endian": "be",
+      "bias": 1
+    },
+    "checksum": null,
+    "note": "length counts itself and the body, not the leading type byte",
+    "directions": {
+      "forward": {
+        "messages": 9,
+        "lengths": [
+          43,
+          47,
+          60,
+          49,
+          49,
+          34,
+          49,
+          48,
+          22
+        ]
+      },
+      "reverse": {
+        "messages": 36,
+        "lengths": [
+          32,
+          17,
+          14,
+          6,
+          32,
+          16,
+          14,
+          6,
+          32,
+          16,
+          14,
+          6,
+          32,
+          16,
+          14,
+          6,
+          32,
+          20,
+          14,
+          6,
+          32,
+          21,
+          14,
+          6,
+          32,
+          18,
+          14,
+          6,
+          32,
+          24,
+          14,
+          6,
+          32,
+          26,
+          14,
+          6
+        ]
+      }
+    }
+  },
+  {
+    "file": "radius-auth.pcap",
+    "protocol": "RADIUS",
+    "basis": "RFC 2865",
+    "transport": "udp",
+    "framing": {
+      "kind": "length-prefix",
+      "lenOffset": 2,
+      "size": 2,
+      "endian": "be",
+      "bias": 0
+    },
+    "checksum": null,
+    "note": "the authenticator is MD5, not a checksum over the message; nothing may be reported",
+    "directions": {
+      "forward": {
+        "messages": 8,
+        "lengths": [
+          77,
+          73,
+          73,
+          74,
+          73,
+          72,
+          73,
+          72
+        ]
+      },
+      "reverse": {
+        "messages": 8,
+        "lengths": [
+          42,
+          45,
+          48,
+          51,
+          54,
+          57,
+          60,
+          63
+        ]
+      }
+    }
+  },
+  {
+    "file": "kafka-metadata.pcap",
+    "protocol": "Kafka (Metadata v9)",
+    "basis": "Kafka protocol guide, request header v1",
+    "transport": "tcp",
+    "framing": {
+      "kind": "length-prefix",
+      "lenOffset": 0,
+      "size": 4,
+      "endian": "be",
+      "bias": 4
+    },
+    "checksum": null,
+    "note": "the four-byte size does not count itself",
+    "directions": {
+      "forward": {
+        "messages": 8,
+        "lengths": [
+          41,
+          51,
+          58,
+          40,
+          43,
+          51,
+          50,
+          41
+        ]
+      },
+      "reverse": {
+        "messages": 8,
+        "lengths": [
+          30,
+          46,
+          59,
+          29,
+          32,
+          46,
+          45,
+          30
+        ]
+      }
+    }
+  },
+  {
+    "file": "stomp-1.2.pcap",
+    "protocol": "STOMP 1.2",
+    "basis": "STOMP 1.2 specification, frame termination",
+    "transport": "tcp",
+    "framing": {
+      "kind": "delimiter",
+      "terminator": "00"
+    },
+    "checksum": null,
+    "note": "every frame ends with a NUL byte",
+    "directions": {
+      "forward": {
+        "messages": 10,
+        "lengths": [
+          76,
+          49,
+          78,
+          78,
+          78,
+          78,
+          78,
+          78,
+          78,
+          78
+        ]
+      },
+      "reverse": {
+        "messages": 9,
+        "lengths": [
+          67,
+          116,
+          116,
+          116,
+          116,
+          116,
+          116,
+          116,
+          116
+        ]
+      }
+    }
+  },
+  {
+    "file": "hl7-mllp.pcap",
+    "protocol": "HL7 v2 over MLLP",
+    "basis": "HL7 MLLP framing, 0x0b start and 0x1c 0x0d end",
+    "transport": "tcp",
+    "framing": {
+      "kind": "start-marker",
+      "marker": "0b"
+    },
+    "checksum": null,
+    "note": "a text stream with a binary frame marker; no trailing checksum exists",
+    "directions": {
+      "forward": {
+        "messages": 5,
+        "lengths": [
+          150,
+          150,
+          151,
+          151,
+          152
+        ]
+      },
+      "reverse": {
+        "messages": 5,
+        "lengths": [
+          88,
+          88,
+          88,
+          88,
+          88
+        ]
+      }
+    }
+  },
+  {
+    "file": "coap-udp.pcap",
+    "protocol": "CoAP",
+    "basis": "RFC 7252",
+    "transport": "udp",
+    "framing": {
+      "kind": "none"
+    },
+    "checksum": null,
+    "note": "datagram protocol with a self-describing header: the right answer is no claim",
+    "directions": {
+      "forward": {
+        "messages": 8,
+        "lengths": [
+          11,
+          16,
+          17,
+          17,
+          15,
+          16,
+          19,
+          20
+        ]
+      },
+      "reverse": {
+        "messages": 8,
+        "lengths": [
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32
+        ]
+      }
+    }
+  },
+  {
+    "file": "syslog-udp.pcap",
+    "protocol": "Syslog",
+    "basis": "RFC 5424",
+    "transport": "udp",
+    "framing": {
+      "kind": "none"
+    },
+    "checksum": null,
+    "note": "one line per datagram: there is no field model to build and none may be invented",
+    "directions": {
+      "forward": {
+        "messages": 8,
+        "lengths": [
+          72,
+          71,
+          82,
+          70,
+          82,
+          78,
+          72,
+          82
+        ]
+      },
+      "reverse": {
+        "messages": 0,
+        "lengths": []
+      }
+    }
+  },
+  {
+    "file": "ubx-serial.pcap",
+    "protocol": "UBX (u-blox)",
+    "basis": "u-blox UBX protocol specification",
+    "transport": "tcp",
+    "framing": {
+      "kind": "start-marker",
+      "marker": "b562"
+    },
+    "checksum": {
+      "algorithm": "sum8",
+      "offsetFromEnd": 1,
+      "width": 1,
+      "rangeStart": 2
+    },
+    "note": "length is little endian and counts only the payload; CK_A is a running sum, CK_B is not catalogued",
+    "directions": {
+      "forward": {
+        "messages": 6,
+        "lengths": [
+          8,
+          24,
+          8,
+          28,
+          8,
+          32
+        ]
+      },
+      "reverse": {
+        "messages": 6,
+        "lengths": [
+          48,
+          10,
+          56,
+          10,
+          64,
+          10
+        ]
+      }
+    }
+  },
+  {
+    "file": "crc32-frame.pcap",
+    "protocol": "CRC-32 probe (synthetic)",
+    "basis": "CRC-32/ISO-HDLC, poly 0x04c11db7, init 0xffffffff, xorout 0xffffffff",
+    "transport": "tcp",
+    "framing": {
+      "kind": "length-prefix",
+      "lenOffset": 0,
+      "size": 4,
+      "endian": "be",
+      "bias": 0
+    },
+    "checksum": {
+      "algorithm": "crc32/ieee",
+      "offsetFromEnd": 0,
+      "width": 4,
+      "rangeStart": 0
+    },
+    "note": "synthetic probe for the 32-bit branch of the catalogue, not a real protocol",
+    "directions": {
+      "forward": {
+        "messages": 12,
+        "lengths": [
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          37,
+          37
+        ]
+      },
+      "reverse": {
+        "messages": 0,
+        "lengths": []
+      }
+    }
+  }
+]
