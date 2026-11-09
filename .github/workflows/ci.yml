@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['20.19', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Verify the fixture captures regenerate byte for byte
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        run: |
+          npm run captures
+          git diff --exit-code captures/
+
+      - name: Verify the package contents
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        run: npm pack --dry-run
+
+      - name: Smoke-test the MCP server handshake
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        run: node .github/scripts/mcp-smoke.mjs

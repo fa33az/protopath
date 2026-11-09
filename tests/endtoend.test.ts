@@ -127,9 +127,9 @@ test('the generated TypeScript client compiles, and round-trips a real message',
 });
 
 test('the generated Python client decodes, re-encodes and verifies a real message', (t) => {
-  const python = spawnSync('python', ['--version'], { encoding: 'utf8' });
-  if (python.status !== 0) {
-    t.skip('python is not available on this machine');
+  const python = findPython();
+  if (!python) {
+    t.skip('no python interpreter on this machine');
     return;
   }
 
@@ -155,10 +155,19 @@ test('the generated Python client decodes, re-encodes and verifies a real messag
     'utf8',
   );
 
-  const run = spawnSync('python', ['run.py'], { cwd: workDir, encoding: 'utf8' });
+  const run = spawnSync(python, ['run.py'], { cwd: workDir, encoding: 'utf8' });
   assert.equal(run.status, 0, `generated python client failed:\n${run.stdout}\n${run.stderr}`);
   assert.match(run.stdout, /ok/);
 });
+
+/** First working interpreter, so the suite runs on Linux (python3) and Windows (python). */
+function findPython(): string | null {
+  for (const candidate of ['python3', 'python']) {
+    const probe = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
+    if (probe.status === 0) return candidate;
+  }
+  return null;
+}
 
 test('the generated Python client carries the checksum inverse it detected', () => {
   const analysis = analyzeFile(capture('binary-session.pcap'));
