@@ -25,6 +25,7 @@ export function emitDissector(analysis: FlowAnalysis, options: DissectorOptions 
   const table = analysis.flow.transport === 'tcp' ? 'tcp.port' : 'udp.port';
   const fields = direction.fields;
   const best = direction.best;
+  const payloadIsText = direction.semantics.payload.encoding === 'text';
 
   if (!best || fields.length === 0) {
     return unframedDissector(name, table, port, analysis);
@@ -44,7 +45,7 @@ export function emitDissector(analysis: FlowAnalysis, options: DissectorOptions 
   lines.push('local f = {}');
 
   for (const field of fields) {
-    lines.push(`f.${luaIdent(field.name)} = ${protoFieldExpression(name, field)}`);
+    lines.push(`f.${luaIdent(field.name)} = ${protoFieldExpression(name, field, payloadIsText)}`);
   }
 
   lines.push('');
@@ -169,11 +170,15 @@ function luaRead(accessor: string, size: number, endian: 'le' | 'be'): string {
   return `${accessor}:${prefix}${size === 2 ? 'uint16' : 'uint32'}()`;
 }
 
-function protoFieldExpression(protoName: string, field: Field): string {
+function protoFieldExpression(protoName: string, field: Field, payloadIsText: boolean): string {
   const label = field.name.replace(/_/g, ' ');
   const id = `${protoName}.${luaIdent(field.name)}`;
   if (field.role === 'text') return `ProtoField.string("${id}", "${label}")`;
-  if (field.role === 'payload') return `ProtoField.bytes("${id}", "${label}")`;
+  if (field.role === 'payload') {
+    return payloadIsText
+      ? `ProtoField.string("${id}", "${label}")`
+      : `ProtoField.bytes("${id}", "${label}")`;
+  }
   if (field.role === 'magic') return `ProtoField.bytes("${id}", "${label}")`;
   const width = field.length > 0 ? field.length : field.width ?? 1;
   if (width === 1) return `ProtoField.uint8("${id}", "${label}", base.${field.role === 'opcode' ? 'HEX' : 'DEC'})`;

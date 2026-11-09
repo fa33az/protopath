@@ -7,7 +7,8 @@ those are more useful than a list of features.
 The pipeline is:
 
 ```
-bytes  ->  flow  ->  reassembly  ->  framing hypotheses  ->  field model  ->  checksum  ->  state graph
+bytes -> flow -> reassembly -> framing -> field model -> checksum
+      -> recovered CRC -> value semantics -> conversation grammar -> family label
 ```
 
 Each stage is allowed to say "no". Nothing invents structure to avoid an empty result.
@@ -81,8 +82,13 @@ Single-offset statistics across all messages:
 |---|---|
 | all messages equal | `const` |
 | strictly `+1 mod 256` between consecutive messages | `counter` |
-| every byte printable ASCII | `printable` |
 | otherwise | `var` |
+
+Printable runs are deliberately **not** a primitive. A variable ASCII run inside a binary-framed
+message is data: a constant word is already captured as `const` and relabelled as text by the
+semantics pass, while a variable one is the start of the payload. Treating it as a header field
+invents a boundary that is not there — the mistake this rule exists to prevent is a "text" field
+swallowing the first four characters of every command word.
 
 Before grouping, wide counters are searched: widths 2 and 4 at offsets inside the first 24 bytes,
 both endiannesses, requiring distinct values and exact `+1` steps modulo the width. This runs
@@ -98,12 +104,15 @@ Grouping, left to right:
 3. A wide counter span → `sequence` (2 or 4 bytes).
 4. Single-byte stepping → `sequence` (1 byte, confidence 0.88).
 5. Constant run → `reserved`.
-6. Printable run of 2+ bytes → `text`.
-7. A `var` offset becomes `type` when its value repeats enough to be a type rather than data:
-   the distinct count must stay under `max(6, 75% of messages)`. A 2-byte reading wins over a
-   1-byte one only when pairing the bytes actually shrinks the alphabet, which is what a 16-bit
-   type does and what "type plus the first data byte" does not. At most one type field per
-   direction is accepted; a second low-cardinality byte is data that happens to repeat.
+6. A `var` offset becomes `type` when its value repeats enough to be a type rather than data:
+   the distinct count must stay under `max(6, 75% of messages)`, and the byte must not be
+   printable in every message — the first letter of a command word varies like a type and is not
+   one. A 2-byte reading wins over a 1-byte one only when pairing the bytes actually shrinks the
+   alphabet, which is what a 16-bit type does and what "type plus the first data byte" does not.
+   At most one type field per direction is accepted; a second low-cardinality byte is data that
+   happens to repeat.
+7. After the type, only a counter is accepted. A constant or printable run there is payload that
+   happens to repeat, and the header ends.
 8. Anything else ends the header; the remainder is `payload`.
 
 A detected checksum is appended as a tail-anchored field at `len - offsetFromEnd - width`, so it
@@ -121,26 +130,123 @@ the report prints them for exactly this reason.
 
 Input: the messages, unmodified.
 
-Twelve algorithms:
+Twenty-six algorithms across three widths:
 
 ```
-sum8  xor8  crc8  crc8/itu
-crc16/ccitt-false  crc16/xmodem  crc16/modbus  crc16/arc  sum16
-crc32/ieee
+8-bit   sum8  xor8  crc8  crc8/itu  crc8/rohc  crc8/maxim  crc8/darc
+        crc8/sae-j1850  crc8/autosar  crc8/cdma2000
+16-bit  sum16  inet16  fletcher16  crc16/ccitt-false  crc16/xmodem  crc16/aug-ccitt
+        crc16/genibus  crc16/t10-dif  crc16/profibus  crc16/kermit  crc16/x25
+        crc16/modbus  crc16/arc  crc16/dnp
+32-bit  fletcher32  adler32  crc32/ieee  crc32/c  crc32/mpeg2  crc32/bzip2
 ```
+
+Every algorithm is expressed through one canonical CRC function, with the polynomial in normal
+form and `refin`/`refout`/`xorout` explicit. That is what makes a recovered parameter set directly
+comparable to a published one instead of merely similar to it.
 
 For each algorithm, the search enumerates field width, field position (`0..4` bytes from the
-end), covered range start (`0..8`), and endianness. A candidate is reported only when it matches
-at least 95% of messages — in practice a real checksum matches 100%, and anything less means the
-algorithm is wrong.
+end), covered range start (`0..8`), and endianness. Because the catalogue is now large, the first
+pass runs on a spread sample of at most 32 messages; every survivor is then re-verified on the
+whole direction, and the reported agreement is over all messages. A candidate is reported only
+when it matches at least 95% of messages — in practice a real checksum matches 100%.
 
-The enumerator is small on purpose: roughly 810 configurations per algorithm, each linear in
-message count. It runs in milliseconds on the fixtures and seconds on a few thousand messages.
+**Symptom:** a checksum that is real but computed over a range starting past byte 8 is not found.
+It appears as no candidate rather than a wrong one.
 
-**Symptom:** a checksum that is real but computed over a range starting past byte 8, or with a
-non-standard seed, is not found. Those appear as no candidate rather than a wrong one.
+## 4. Recovered CRC parameters
 
-## 4. Message transitions
+When the catalogue finds nothing, the parameters are solved instead of guessed. The full
+derivation and its two ambiguities are in **[crc-recovery.md](crc-recovery.md)**; the short
+version:
+
+1. Two messages of equal covered length cancel init and xorout under xor, leaving one equation in
+   the polynomial. Enumerate odd polynomials, both reflections, four field layouts.
+2. For each survivor, solve init from a GF(2) system built from two messages of *different*
+   length, then derive xorout from any one message.
+3. Recompute the check field of every message. Anything short of 100% is discarded.
+
+This runs on the strongest flow only, because it costs a few hundred milliseconds per direction
+and a capture with twenty conversations does not need twenty solves.
+
+Reported when it succeeds: polynomial in both normal and reflected form, init, xorout, refin,
+refout, the covered range, and any ambiguity the capture could not settle.
+
+**Symptom of a useless result:** `init` marked ambiguous while every message has the same length.
+That is not a defect — the capture genuinely lacks the information.
+
+## 5. Value semantics
+
+Input: the messages and the field model.
+
+Each numeric field is classified from its decoded values, in this order:
+
+| Test | Domain | Confidence |
+|---|---|---|
+| one distinct value | `constant` | 0.95 |
+| equals `len - c` for a constant `c`, every message | `length` | 0.90 |
+| role is `counter` | `counter` | 0.95 |
+| role is `checksum` | `opaque` | 0.95 |
+| only 0 and 1, both present | `boolean` | 0.90 |
+| every byte printable ASCII | `text` | 0.80 |
+| 4 bytes inside the unix seconds or milliseconds window | `timestamp` | 0.70 |
+| ≤ 3 bits ever set, values not consecutive | `flags` | 0.60 |
+| ≤ 8 distinct values, each seen at least twice | `enum` | 0.75 |
+| anything else | `range` | 0.40 |
+
+The printable check comes **before** the timestamp check on purpose: `"chan"` read as a 32-bit
+big-endian integer is 1667331182, which is 22 July 2022. Four ASCII bytes land in the unix window
+often enough that the ordering decides correctness, not taste.
+
+Payloads are then read whole. If at least 90% of payload bytes are printable, the payload is text
+and is tokenised: the first token becomes a verb, later positions are typed as integer, decimal,
+IPv4 address, identifier or quoted string, and positions that never vary are reported as
+constants. Otherwise printable runs of 3–32 bytes are located by offset and kept when they appear
+at the same offset in at least half the messages, and a fixed-record layout is reported only when
+payload lengths are multiples of a small size **and** at least a quarter of the byte columns never
+change.
+
+## 6. Conversation grammar
+
+Input: the messages from both directions.
+
+Messages are merged by timestamp, with the request sorted before the response when a burst shares
+one timestamp — without that tie-break, a segment carrying two messages pairs backwards and every
+latency figure after it is wrong.
+
+Pairing is FIFO: the oldest unanswered forward message takes the next reverse message. That is
+right for strict request/response protocols and for pipelining, and wrong for anything that
+answers out of order, which the notes say out loud.
+
+From the pairing:
+
+- **latency** — min, median and max round trip
+- **call shapes** — which request label drew which response label, and how often
+- **handshake** — the leading run of exchanges whose pair never recurs later, capped at six and
+  reported only when at least three exchanges follow it
+- **pipelining** — whether more than one request was ever outstanding
+
+The handshake list is the practical output: it is where a replay has to start.
+
+## 7. Protocol family
+
+Input: everything above.
+
+A family is named only when at least two independent structural signals agree, and the match is
+written as "consistent with", never "is". Port numbers count as one signal and are never the
+reason: a server on 502 that frames like Modbus is Modbus, a server on 502 that frames like
+nothing in particular is a server on 502.
+
+Modbus/TCP, for instance, needs the MBAP length bias at offset 4, the constant protocol identifier
+at bytes 2–4, the unit identifier, and function codes in range — and is rejected outright if a
+checksum field was found, because Modbus/TCP has none.
+
+Four or more signals score 0.95, three score 0.85, two score 0.70.
+
+**Symptom of a wrong label:** one signal is present for an unrelated reason. Two signals is a low
+bar by design; read them before trusting the name.
+
+## 8. Message transitions
 
 Messages from both directions are merged by timestamp. Each is labelled from the `type` field
 when one exists, otherwise from direction and a length bucket. Consecutive labels become edges.
@@ -156,13 +262,17 @@ follows which request. It cannot tell you that a field must be `0x02` before `0x
 | Two hypotheses within 0.05 | the protocol genuinely fits both descriptions | read the field table for both; the wrong one usually produces garbage field names |
 | `reserved` where you expect a type field | the field never varied in this capture | capture both sides of the exchange |
 | Counter detected at a fixed offset, confidence 0.88 | a data byte that happened to step | check whether the values wrap at 0xff in order |
-| Payload one byte too long | a field at the end of the header varies too much to classify | lower the opcode threshold or inspect the four hex messages |
-| No checksum candidate | non-standard seed, or range beyond byte 8 | verify manually with the algorithm list |
+| Payload one byte too long | a field at the end of the header varies too much to classify | inspect the four hex messages the report prints |
+| No checksum candidate | covered range past byte 8 | the recovery pass tries a smaller layout set; extend it with `options.layouts` |
+| CRC recovery finds nothing | fewer than five messages, a constant check field, or no two messages of equal covered length | capture more traffic |
+| A four-byte field labelled `timestamp` | an ASCII word that happens to read as a plausible date | it should not happen; the printable check runs first, so report it |
+| Latency of 0.00 ms | both messages arrived in one segment | expected; the capture has no finer timing |
 
 ## What this method cannot do
 
 - Prove a field boundary. It reports the most likely one, with a confidence and a competing
   hypothesis.
-- Infer semantics. `type=0x10` is a value, not "read request". That mapping is yours.
+- Name a message type. `type=0x10` is a value, not "read request". The family label narrows the
+  vocabulary; the mapping is yours.
 - Recover encryption. Ciphertext is high-entropy noise to these statistics.
 - Work on a single message. Everything here is a comparison across messages.

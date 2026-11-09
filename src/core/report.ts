@@ -3,6 +3,8 @@ import { VERSION } from './pipeline.js';
 import { toMermaid } from './infer/state.js';
 import type { Field } from './infer/fields.js';
 import type { FramingHypothesis } from './infer/framing.js';
+import type { Semantics } from './infer/semantics.js';
+import type { GrammarAnalysis } from './infer/grammar.js';
 
 export function renderReport(analysis: CaptureAnalysis): string {
   const lines: string[] = [];
@@ -47,6 +49,10 @@ export function renderReport(analysis: CaptureAnalysis): string {
   lines.push('- Field offsets come from statistics across captured messages, not from the protocol specification.');
   lines.push('- A field that never varied in this capture is indistinguishable from a constant, so it is reported as `reserved`.');
   lines.push('- Message labels for the state graph are derived from inferred type fields; a wrong opcode boundary makes every label wrong.');
+  lines.push('- Value domains are hypotheses about what a field is, fitted from observed values. A counter that happens to look like a timestamp is indistinguishable here.');
+  lines.push('- A recovered CRC is exact for the messages captured and says nothing about messages the capture never contained.');
+  lines.push('- Request/response pairing is FIFO. A protocol that answers out of order will be paired wrongly and the latency figures will be wrong with it.');
+  lines.push('- A family label means the structure matches; it is not confirmation. Confirm against the specification before relying on it.');
   lines.push('- Only the flows listed above were analysed. Other conversations in the capture were ignored on purpose.');
   lines.push('');
 
@@ -65,6 +71,20 @@ function renderFlow(flow: FlowAnalysis): string[] {
   for (const note of flow.notes) lines.push(`> ${note}`);
   if (flow.notes.length > 0) lines.push('');
 
+  if (flow.fingerprint) {
+    const fingerprint = flow.fingerprint;
+    lines.push(`### Consistent with ${fingerprint.family}`);
+    lines.push('');
+    lines.push(`${fingerprint.detail} — confidence ${fingerprint.confidence.toFixed(2)}.`);
+    lines.push('');
+    for (const signal of fingerprint.signals) lines.push(`- ${signal}`);
+    lines.push('');
+    lines.push(`_Caveat: ${fingerprint.caveat}_`);
+    lines.push('');
+    lines.push(`Reference: ${fingerprint.reference}`);
+    lines.push('');
+  }
+
   lines.push(...renderDirection(flow.forward));
   lines.push(...renderDirection(flow.reverse));
 
@@ -72,6 +92,54 @@ function renderFlow(flow: FlowAnalysis): string[] {
   for (const note of flow.graph.notes) lines.push(`- ${note}`);
   lines.push('');
 
+  lines.push(...renderGrammar(flow.grammar));
+
+  return lines;
+}
+
+function renderGrammar(grammar: GrammarAnalysis): string[] {
+  const lines: string[] = [];
+  lines.push('### Request/response pairing');
+  lines.push('');
+
+  if (grammar.exchanges.length === 0) {
+    lines.push('_No pairing: fewer than two messages were recovered._');
+    lines.push('');
+    return lines;
+  }
+
+  const paired = grammar.exchanges.filter((exchange) => exchange.response).length;
+  lines.push(`${paired} paired exchange(s) out of ${grammar.exchanges.length} request(s).`);
+  lines.push('');
+
+  if (grammar.latency) {
+    lines.push(
+      `Latency: min ${grammar.latency.minMs.toFixed(2)} ms, median ${grammar.latency.medianMs.toFixed(2)} ms, ` +
+        `max ${grammar.latency.maxMs.toFixed(2)} ms over ${grammar.latency.count} round trip(s).`,
+    );
+    lines.push('');
+  }
+
+  if (grammar.calls.length > 0) {
+    lines.push('| Request | Response | Count |');
+    lines.push('|---------|----------|-------|');
+    for (const call of grammar.calls.slice(0, 12)) {
+      for (const response of call.responses) {
+        lines.push(`| \`${call.request}\` | \`${response.label}\` | ${response.count} |`);
+      }
+    }
+    lines.push('');
+  }
+
+  if (grammar.handshake.length > 0) {
+    lines.push('Leading exchanges that never repeat later — start a replay here:');
+    lines.push('');
+    for (const step of grammar.handshake) lines.push(`1. \`${step}\``);
+    lines.push('');
+  }
+
+  for (const note of grammar.notes) lines.push(`- ${note}`);
+  if (grammar.notes.length > 0) lines.push('');
   return lines;
 }
 
@@ -135,6 +203,47 @@ function renderDirection(direction: DirectionAnalysis): string[] {
     lines.push('');
   }
 
+  if (direction.crcRecovery.length > 0) {
+    const recovered = direction.crcRecovery[0]!;
+    const p = recovered.params;
+    const hex = (value: number): string => `0x${value.toString(16).padStart(p.width / 4, '0')}`;
+    lines.push('**Recovered checksum parameters**');
+    lines.push('');
+    lines.push('No catalogued algorithm matched, so the parameters were solved from the messages themselves.');
+    lines.push('');
+    lines.push(`- polynomial: \`${hex(p.poly)}\` (normal form), \`${hex(recovered.reflectedPoly)}\` reflected`);
+    lines.push(`- init: \`${hex(p.init)}\`, xorout: \`${hex(p.xorout)}\`, refin ${p.refin}, refout ${p.refout}`);
+    lines.push(
+      `- covers bytes \`[${recovered.rangeStart}, len-${recovered.offsetFromEnd + recovered.width})\`, ` +
+        `field read ${recovered.endian} at \`len-${recovered.offsetFromEnd + recovered.width}\``,
+    );
+    lines.push(`- verified against all ${recovered.total} messages, no exceptions`);
+    lines.push('');
+    for (const limitation of recovered.limitations) lines.push(`- limitation: ${limitation}`);
+    if (recovered.limitations.length > 0) lines.push('');
+    if (direction.crcRecovery.length > 1) {
+      lines.push(
+        `_${direction.crcRecovery.length - 1} other parameter set(s) also reproduce this direction; the generated client embeds the first._`,
+      );
+      lines.push('');
+    }
+  }
+
+  if (direction.semantics.domains.length > 0) {
+    lines.push('**Field semantics**');
+    lines.push('');
+    lines.push('| Field | Domain | Values | Confidence | Why |');
+    lines.push('|-------|--------|--------|------------|-----|');
+    for (const domain of direction.semantics.domains) {
+      const values = domain.values.length > 0 ? domain.values.slice(0, 4).join(', ') : '—';
+      lines.push(`| \`${domain.field}\` | ${domain.domain} | ${values} | ${domain.confidence.toFixed(2)} | ${domain.note} |`);
+    }
+    lines.push('');
+  }
+
+  const payloadLines = renderPayload(direction.semantics);
+  if (payloadLines.length > 0) lines.push(...payloadLines);
+
   if (direction.messages.length > 0) {
     lines.push('**First messages**');
     lines.push('');
@@ -150,10 +259,54 @@ function renderDirection(direction: DirectionAnalysis): string[] {
   return lines;
 }
 
+function renderPayload(semantics: Semantics): string[] {
+  const lines: string[] = [];
+  const payload = semantics.payload;
+
+  if (payload.encoding === 'text' && payload.vocabulary) {
+    const vocabulary = payload.vocabulary;
+    lines.push(`**Payload — text, ${vocabulary.verbs.length} leading token(s)**`);
+    lines.push('');
+    lines.push('| Kind | Position | Values |');
+    lines.push('|------|----------|--------|');
+    for (const verb of vocabulary.verbs.slice(0, 8)) {
+      lines.push(`| verb | 0 | \`${verb.value}\` ×${verb.count} |`);
+    }
+    for (const argument of vocabulary.arguments.slice(0, 8)) {
+      lines.push(`| ${argument.kind} | ${argument.position} | \`${argument.examples.join('`, `')}\` |`);
+    }
+    for (const constant of vocabulary.constants.slice(0, 8)) {
+      lines.push(`| constant | ${constant.position} | \`${constant.value}\` |`);
+    }
+    lines.push('');
+    return lines;
+  }
+
+  if (payload.strings.length > 0) {
+    lines.push('**Payload — binary, with printable runs at stable offsets**');
+    lines.push('');
+    lines.push('| Offset | Values | Messages |');
+    lines.push('|--------|--------|----------|');
+    for (const entry of payload.strings) {
+      const values = entry.values.map((value) => `\`${value}\``).join(', ');
+      lines.push(`| payload+${entry.offset} | ${values} | ${entry.messages} |`);
+    }
+    lines.push('');
+  }
+
+  if (payload.record) {
+    lines.push(`_${payload.record.note}_`);
+    lines.push('');
+  }
+
+  return lines;
+}
+
 export function renderJsonl(flow: FlowAnalysis): string {
   const lines: string[] = [];
   for (const direction of [flow.forward, flow.reverse]) {
     for (const message of direction.messages) {
+      const text = decodeAsText(message.bytes);
       lines.push(
         JSON.stringify({
           direction: message.direction,
@@ -162,11 +315,20 @@ export function renderJsonl(flow: FlowAnalysis): string {
           label: message.label,
           length: message.bytes.length,
           hex: message.bytes.toString('hex'),
+          ...(text ? { text } : {}),
         }),
       );
     }
   }
   return lines.join('\n') + '\n';
+}
+
+/** Printable rendering of a message, or null when it is mostly binary. */
+function decodeAsText(bytes: Buffer): string | null {
+  let printable = 0;
+  for (const byte of bytes) if ((byte >= 0x20 && byte <= 0x7e) || byte === 0x09 || byte === 0x0a || byte === 0x0d) printable++;
+  if (printable / Math.max(1, bytes.length) < 0.9) return null;
+  return bytes.toString('latin1').replace(/\r?\n$/, '');
 }
 
 /** JSON view of the analysis with byte buffers rendered as hex. */
@@ -177,6 +339,7 @@ export function renderJson(analysis: CaptureAnalysis): string {
     packets: flow.flow.frames.length,
     primary: flow.primary,
     notes: flow.notes,
+    fingerprint: flow.fingerprint,
     forward: serializeDirection(flow.forward),
     reverse: serializeDirection(flow.reverse),
     graph: {
@@ -184,6 +347,16 @@ export function renderJson(analysis: CaptureAnalysis): string {
       transitions: flow.graph.transitions,
       start: flow.graph.start,
       notes: flow.graph.notes,
+    },
+    grammar: {
+      exchanges: flow.grammar.exchanges.slice(0, 500),
+      calls: flow.grammar.calls,
+      latency: flow.grammar.latency,
+      unpairedRequests: flow.grammar.unpairedRequests,
+      unpairedResponses: flow.grammar.unpairedResponses,
+      handshake: flow.grammar.handshake,
+      pipelined: flow.grammar.pipelined,
+      notes: flow.grammar.notes,
     },
   }));
 
@@ -223,14 +396,33 @@ function serializeDirection(direction: DirectionAnalysis) {
       confidence: Number(field.confidence.toFixed(3)),
       evidence: field.evidence,
       stats: field.stats,
+      ...(field.algorithm ? { algorithm: field.algorithm } : {}),
+      ...(field.spec ? { spec: field.spec } : {}),
     })),
     checksums: direction.checksums.map((checksum) => ({
       algorithm: checksum.algorithm,
       width: checksum.width,
       offsetFromEnd: checksum.offsetFromEnd,
+      rangeStart: checksum.rangeStart,
       matches: checksum.matches,
       total: checksum.total,
     })),
+    crcRecovery: direction.crcRecovery.map((recovery) => ({
+      algorithm: recovery.algorithm,
+      params: recovery.params,
+      reflectedPoly: recovery.reflectedPoly,
+      endian: recovery.endian,
+      offsetFromEnd: recovery.offsetFromEnd,
+      rangeStart: recovery.rangeStart,
+      initAmbiguous: recovery.initAmbiguous,
+      evidence: recovery.evidence,
+      limitations: recovery.limitations,
+    })),
+    semantics: {
+      domains: direction.semantics.domains,
+      payload: direction.semantics.payload,
+      notes: direction.semantics.notes,
+    },
     notes: direction.notes,
     limitations: direction.limitations,
   };

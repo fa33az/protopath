@@ -1,6 +1,6 @@
 {
   "name": "protopath-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Infer wire protocol structure from a pcap or pcapng capture: framing, fields, counters, checksums. MCP server, Wireshark dissector, TypeScript and Python clients.",
   "license": "MIT",
   "type": "module",

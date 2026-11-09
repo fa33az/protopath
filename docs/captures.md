@@ -28,7 +28,8 @@ retransmission per exchange. The `.pcapng` file is the same traffic in a differe
 so the test suite can assert both parsers produce identical streams.
 
 Expected inference: length-prefix at offset 2 with bias 0, six fields, checksum
-`crc16/modbus` matching 10/10.
+`crc16/modbus` matching 10/10, `type` read as a two-value enum, and the printable run `uptime`
+located at payload offset 0.
 
 ## `binary-session-v2.pcap`
 
@@ -44,9 +45,8 @@ offset  size  field
 ```
 
 Its purpose is `protopath diff`: the type byte's disappearance has to show up as a layout change,
-not as a silent reinterpretation. The honest answer here is that bytes 5..8 become `text`,
-because the payload of this session is ASCII — the tool cannot know a field was removed, only
-that the layout moved.
+not as a silent reinterpretation. The header ends after `sequence` and the ASCII payload begins at
+byte 5; the tool cannot know a field was removed, only that the layout moved.
 
 ## `text-session.pcap`
 
@@ -86,8 +86,8 @@ Framing is recovered as a start-marker `0xaa55`. This fixture exists to prove th
 session, no sequence numbers, datagrams simply concatenated in arrival order — which is exactly
 why the sequence counter is worth detecting.
 
-Expected inference: start-marker `0xaa55`, `magic`, `type` at the state byte, `payload` for the
-rest. `reserved` padding is what stops the header from extending further.
+Expected inference: start-marker `0xaa55`, `magic`, `type` at the state byte, `sequence` at byte 3,
+`payload` for the rest. `reserved` padding is what stops the header from extending further.
 
 ---
 
@@ -100,7 +100,34 @@ rest. `reserved` padding is what stops the header from extending further.
 | binary-session-v2.pcap | length-prefix, 1B BE @2, bias 0 | 8 + 8 | crc16/modbus 8/8 | type byte removed |
 | text-session.pcap | delimiter `0x0a` | 8 + 8 | none | ASCII protocol |
 | sensor-udp.pcap | start-marker `0xaa55` | 24 | none | UDP, no session |
+| custom-crc.pcap | length-prefix, 2B BE @0, bias 2 | 10 + 10 | crc16 0x8f57/0x1234, 10/10 | private polynomial, recovered |
 | modbus-session.pcap | length-prefix, 2B BE @4, bias 6 | 15 + 15 | none | recorded from a real implementation |
+
+---
+
+## `custom-crc.pcap`
+
+TCP, `10.0.0.50:44000` → `10.0.0.60:7404`. Ten request/response rounds. The point of this
+fixture is that nothing in the checksum catalogue matches it:
+
+```
+offset  size  field
+0       2     length       total message length - 2, big endian
+2       2     sequence     big endian, +1 per message per direction
+4       1     type         0x21 request, 0x22 response
+5       n     payload      ASCII: a key name outbound, "key=value" inbound
+5+n     2     checksum     crc16, poly 0x8f57, init 0x1234, refin/refout, little endian
+```
+
+The polynomial and the initial value appear in no published table. Expected inference: the
+length-prefix framing, a two-byte counter, and a recovered CRC parameter set matching all ten
+messages exactly — including the reflected polynomial `0xeaf1`, which the generator never stores.
+
+Known limitation of this fixture, and the honest behaviour worth keeping: every request carries the
+same type byte, so that byte is reported as `reserved` rather than as a `type`. The report says
+"identical 0x21 in all 10 messages" and leaves the conclusion to the reader.
+
+Read the derivation in **[crc-recovery.md](crc-recovery.md)**.
 
 ---
 

@@ -2,13 +2,17 @@ import { Buffer } from 'node:buffer';
 import { readCapture } from './pcap/reader.js';
 import { framesFromCapture } from './net/decode.js';
 import { buildFlows, sameEndpoint, timestampAt } from './net/flows.js';
-import { detectChecksum, type ChecksumMatch } from './infer/checksum.js';
+import { detectChecksum, type ChecksumMatch, type ChecksumSpec } from './infer/checksum.js';
+import { recoverCrc, type CrcRecovery } from './infer/crc-recovery.js';
 import { inferFraming, isConfident, type FramingHypothesis } from './infer/framing.js';
 import { inferFields, type Field } from './infer/fields.js';
+import { inferSemantics, type Semantics } from './infer/semantics.js';
+import { inferGrammar, type GrammarAnalysis } from './infer/grammar.js';
+import { fingerprintProtocol, type Fingerprint } from './infer/fingerprint.js';
 import { buildStateGraph, labelMessage, type MessageRecord, type StateGraph } from './infer/state.js';
 import type { Capture, Flow, StreamState } from './types.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 export interface DirectionAnalysis {
   direction: 'forward' | 'reverse';
@@ -19,6 +23,9 @@ export interface DirectionAnalysis {
   best: FramingHypothesis | undefined;
   fields: Field[];
   checksums: ChecksumMatch[];
+  /** CRC parameter sets recovered from the data when no named algorithm fit. */
+  crcRecovery: CrcRecovery[];
+  semantics: Semantics;
   messages: MessageRecord[];
   notes: string[];
   limitations: string[];
@@ -29,6 +36,10 @@ export interface FlowAnalysis {
   forward: DirectionAnalysis;
   reverse: DirectionAnalysis;
   graph: StateGraph;
+  /** Request/response pairing, latency and call shapes. */
+  grammar: GrammarAnalysis;
+  /** Known protocol family this flow is consistent with, when the structure is specific enough. */
+  fingerprint: Fingerprint | undefined;
   /** Direction the protocol description was taken from: the one with more structure. */
   primary: 'forward' | 'reverse';
   /** Capture this flow was read from, used in generated file headers. */
@@ -55,6 +66,14 @@ export interface AnalyzeOptions {
   flow?: string;
   /** Upper bound on how many flows are analysed, largest first. */
   maxFlows?: number;
+}
+
+export interface FlowOptions {
+  /**
+   * Run the CRC parameter search. It is a fallback that costs a few hundred milliseconds, so
+   * it runs on the strongest flow only rather than on every conversation in a capture.
+   */
+  deep?: boolean;
 }
 
 export function loadCapture(path: string): Capture {
@@ -88,9 +107,13 @@ export function analyzeCapture(capture: Capture, options: AnalyzeOptions = {}): 
   }
 
   const analyzed = candidates
-    .map((flow) => analyzeFlow(flow, capture.path))
+    .map((flow) => analyzeFlow(flow, capture.path, { deep: false }))
     .sort((a, b) => scoreFlow(b) - scoreFlow(a))
     .slice(0, options.maxFlows ?? 4);
+
+  // The CRC parameter search is a few hundred milliseconds per direction and only pays off on
+  // the conversation the user cares about, so it runs once, on the flow that already won.
+  if (analyzed[0]) analyzed[0] = analyzeFlow(analyzed[0].flow, capture.path, { deep: true });
 
   const partial = analyzed.filter((a) => {
     const direction = a.primary === 'forward' ? a.forward : a.reverse;
@@ -117,14 +140,25 @@ export function analyzeCapture(capture: Capture, options: AnalyzeOptions = {}): 
   };
 }
 
-export function analyzeFlow(flow: Flow, capturePath = ''): FlowAnalysis {
-  const forward = analyzeDirection(flow, 'forward');
-  const reverse = analyzeDirection(flow, 'reverse');
+export function analyzeFlow(flow: Flow, capturePath = '', options: FlowOptions = {}): FlowAnalysis {
+  const forward = analyzeDirection(flow, 'forward', options);
+  const reverse = analyzeDirection(flow, 'reverse', options);
 
   const primary = forward.best && (!reverse.best || forward.best.score >= reverse.best.score) ? 'forward' : 'reverse';
   const primaryFields = primary === 'forward' ? forward.fields : reverse.fields;
   const messages = [...forward.messages, ...reverse.messages];
   const graph = buildStateGraph(messages, primaryFields);
+  const grammar = inferGrammar(messages);
+  const fingerprint = fingerprintProtocol({
+    transport: flow.transport,
+    clientPort: flow.b.port,
+    serverPort: flow.b.port,
+    directions: [forward, reverse].map((direction) => ({
+      messages: direction.messages.map((message) => message.bytes),
+      fields: direction.fields,
+      framing: direction.best,
+    })),
+  });
 
   const notes: string[] = [];
   if (forward.best && reverse.best) {
@@ -140,11 +174,20 @@ export function analyzeFlow(flow: Flow, capturePath = ''): FlowAnalysis {
       }
     }
   }
+  if (fingerprint) {
+    notes.push(`structure is consistent with ${fingerprint.family}, not proven to be it`);
+  }
 
-  return { flow, forward, reverse, graph, primary, capturePath, notes };
+  return { flow, forward, reverse, graph, grammar, fingerprint, primary, capturePath, notes };
 }
 
-function analyzeDirection(flow: Flow, direction: 'forward' | 'reverse'): DirectionAnalysis {
+const EMPTY_SEMANTICS: Semantics = {
+  domains: [],
+  payload: { encoding: 'binary', strings: [], notes: ['no message model was produced'] },
+  notes: [],
+};
+
+function analyzeDirection(flow: Flow, direction: 'forward' | 'reverse', options: FlowOptions = {}): DirectionAnalysis {
   const stream: StreamState = direction === 'forward' ? flow.forward : flow.reverse;
   const label = direction === 'forward' ? `${formatEndpoint(flow.a)} -> ${formatEndpoint(flow.b)}` : `${formatEndpoint(flow.b)} -> ${formatEndpoint(flow.a)}`;
   const notes: string[] = [];
@@ -160,6 +203,8 @@ function analyzeDirection(flow: Flow, direction: 'forward' | 'reverse'): Directi
       best: undefined,
       fields: [],
       checksums: [],
+      crcRecovery: [],
+      semantics: EMPTY_SEMANTICS,
       messages: [],
       notes: ['this direction carries no bytes'],
       limitations: [],
@@ -178,18 +223,35 @@ function analyzeDirection(flow: Flow, direction: 'forward' | 'reverse'): Directi
   const confident = isConfident(best);
 
   let checksums: ChecksumMatch[] = [];
+  let crcRecovery: CrcRecovery[] = [];
   let fields: Field[] = [];
+  let semantics: Semantics = EMPTY_SEMANTICS;
 
   if (best && confident) {
     checksums = detectChecksum(best.messages);
+
+    if (checksums.length === 0 && options.deep) {
+      crcRecovery = recoverCrc(best.messages);
+      const recovered = crcRecovery[0];
+      if (recovered) {
+        checksums = [recovered];
+        notes.push(
+          'no catalogued checksum matched, but the parameter set was recovered from the bytes themselves and verified against every message',
+        );
+        limitations.push(...recovered.limitations);
+      }
+    }
+
     const inference = inferFields({
       messages: best.messages,
       framing: best.kind,
       ...(best.lengthPrefix ? { lengthPrefix: best.lengthPrefix } : {}),
-      ...(checksums[0] ? { checksum: checksums[0] } : {}),
+      ...(checksums[0] ? { checksum: checksums[0], ...(crcRecovery[0] ? { spec: crcRecovery[0].spec } : {}) } : {}),
     });
     fields = inference.fields;
     notes.push(...inference.notes);
+    semantics = inferSemantics(best.messages, fields);
+    notes.push(...semantics.notes);
 
     const alternative = framing[1];
     if (alternative && best.score - alternative.score < 0.05) {
@@ -224,6 +286,8 @@ function analyzeDirection(flow: Flow, direction: 'forward' | 'reverse'): Directi
     best,
     fields,
     checksums,
+    crcRecovery,
+    semantics,
     messages,
     notes,
     limitations,
@@ -236,7 +300,8 @@ function scoreFlow(analysis: FlowAnalysis): number {
   const bytes = analysis.forward.bytes + analysis.reverse.bytes;
   const opcodeBonus = analysis.forward.fields.some((f) => f.role === 'opcode') ? 0.05 : 0;
   const checksumBonus = analysis.forward.checksums.length > 0 ? 0.05 : 0;
-  return (forward + reverse) / 2 + Math.min(bytes, 1_000_000) / 5_000_000 + opcodeBonus + checksumBonus;
+  const semanticsBonus = analysis.forward.semantics.domains.length > 0 ? 0.02 : 0;
+  return (forward + reverse) / 2 + Math.min(bytes, 1_000_000) / 5_000_000 + opcodeBonus + checksumBonus + semanticsBonus;
 }
 
 export function formatEndpoint(endpoint: { ip: string; port: number }): string {

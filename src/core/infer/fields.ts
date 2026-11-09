@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import type { Endian } from '../types.js';
-import type { ChecksumMatch } from './checksum.js';
+import type { ChecksumMatch, ChecksumSpec } from './checksum.js';
 import type { FramingKind, LengthPrefixSpec } from './framing.js';
 
 export type FieldRole = 'magic' | 'length' | 'counter' | 'opcode' | 'checksum' | 'text' | 'reserved' | 'payload' | 'unknown';
@@ -29,6 +29,8 @@ export interface Field {
   };
   /** For checksum fields: the algorithm whose inverse the generated client embeds. */
   algorithm?: string;
+  /** For checksum fields recovered from the data: the exact parameter set to embed. */
+  spec?: ChecksumSpec;
   confidence: number;
   evidence: string[];
 }
@@ -38,6 +40,8 @@ export interface FieldInferenceInput {
   framing: FramingKind;
   lengthPrefix?: LengthPrefixSpec;
   checksum?: ChecksumMatch;
+  /** Parameter set for `checksum` when it was recovered rather than named. */
+  spec?: ChecksumSpec;
 }
 
 export interface FieldInference {
@@ -47,13 +51,13 @@ export interface FieldInference {
   notes: string[];
 }
 
-type Primitive = 'const' | 'counter' | 'length' | 'printable' | 'var';
+type Primitive = 'const' | 'counter' | 'length' | 'var';
 
 /** Wide counters are searched only in the first bytes of a message, where headers live. */
 const MAX_HEADER_SCAN = 24;
 
 export function inferFields(input: FieldInferenceInput): FieldInference {
-  const { messages, framing, lengthPrefix, checksum } = input;
+  const { messages, framing, lengthPrefix, checksum, spec } = input;
   const notes: string[] = [];
 
   if (messages.length < 3) {
@@ -103,9 +107,10 @@ export function inferFields(input: FieldInferenceInput): FieldInference {
       primitive.push('counter');
     } else if (values.every((v) => v === values[0])) {
       primitive.push('const');
-    } else if (values.every(isPrintable)) {
-      primitive.push('printable');
     } else {
+      // Printable bytes inside a binary-framed message are data, not a header field. A constant
+      // word is already captured above as `reserved`, and the semantics pass relabels it as
+      // text. Treating a variable run as a header field invents a boundary that is not there.
       primitive.push('var');
     }
   }
@@ -141,6 +146,9 @@ export function inferFields(input: FieldInferenceInput): FieldInference {
   }
 
   let cursor = magicWidth;
+  // A protocol has one message type. Bytes after it may still be a sequence number, but a
+  // second low-cardinality byte is data that happens to repeat.
+  let opcodeSeen = false;
   while (cursor < prefixLength) {
     if (lengthSpan && cursor >= lengthSpan[0] && cursor < lengthSpan[1]) {
       fields.push({
@@ -200,6 +208,10 @@ export function inferFields(input: FieldInferenceInput): FieldInference {
       continue;
     }
 
+    // A counter is the only thing allowed after the message type. A constant or printable run
+    // there is payload data that happens to repeat, not another header field.
+    if (opcodeSeen) break;
+
     if (cls === 'const') {
       const end = runEnd(primitive, cursor, prefixLength, 'const', lengthSpan, wideCounters);
       const constant = messages[0]!.subarray(cursor, end).toString('hex');
@@ -217,24 +229,7 @@ export function inferFields(input: FieldInferenceInput): FieldInference {
       continue;
     }
 
-    if (cls === 'printable') {
-      const end = runEnd(primitive, cursor, prefixLength, 'printable', lengthSpan, wideCounters);
-      const distinct = new Set(messages.map((m) => m.subarray(cursor, end).toString('latin1'))).size;
-      fields.push({
-        name: unique('text', used),
-        role: 'text',
-        anchor: 'head',
-        offset: cursor,
-        length: end - cursor,
-        stats: { distinct },
-        confidence: 0.75,
-        evidence: ['every byte in this run is printable ASCII across all messages'],
-      });
-      cursor = end;
-      continue;
-    }
-
-    const opcode = tryOpcode(messages, cursor, prefixLength);
+    const opcode = opcodeSeen ? null : tryOpcode(messages, cursor, prefixLength);
     if (opcode) {
       const decoded = messages.map((m) => readAt(m, cursor, opcode.width, 'be'));
       fields.push({
@@ -252,9 +247,8 @@ export function inferFields(input: FieldInferenceInput): FieldInference {
         ],
       });
       cursor += opcode.width;
-      // One message type is expected. A second low-cardinality byte in the header is data that
-      // happens to repeat in this session, not another type field.
-      break;
+      opcodeSeen = true;
+      continue;
     }
 
     // Anything left is data that happens to sit inside the common prefix.
@@ -288,6 +282,7 @@ export function inferFields(input: FieldInferenceInput): FieldInference {
       width: checksum.width,
       endian: checksum.endian,
       algorithm: checksum.algorithm,
+      ...(spec ? { spec } : {}),
       stats: { distinct: messages.length },
       confidence: checksum.confidence,
       evidence: [checksum.evidence],
@@ -331,6 +326,11 @@ function tryOpcode(messages: Buffer[], cursor: number, prefixLength: number): { 
   const cap = Math.max(6, Math.ceil(messages.length * 0.75));
   const singles = new Set(messages.map((m) => m[cursor]!));
   if (singles.size < 2 || singles.size > cap) return null;
+
+  // A byte that is printable in every message is a letter, not a code. Binary protocols do use
+  // ASCII in message types, but then the field is constant or the framing is textual, and
+  // calling the first letter of a command word an opcode invents a boundary one byte too late.
+  if (messages.every((m) => isPrintable(m[cursor]!))) return null;
 
   if (cursor + 2 <= prefixLength) {
     const pairs = new Set(messages.map((m) => readAt(m, cursor, 2, 'be')));

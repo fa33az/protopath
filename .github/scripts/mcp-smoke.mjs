@@ -65,7 +65,17 @@ try {
 
   const tools = await request('tools/list', {});
   const names = (tools.tools ?? []).map((tool) => tool.name).sort();
-  const expected = ['analyze_capture', 'detect_checksums', 'diff_captures', 'emit_artifacts', 'infer_fields', 'list_flows'];
+  const expected = [
+    'analyze_capture',
+    'detect_checksums',
+    'diff_captures',
+    'emit_artifacts',
+    'explain_semantics',
+    'infer_fields',
+    'list_flows',
+    'recover_checksum_parameters',
+    'trace_conversation',
+  ];
   if (JSON.stringify(names) !== JSON.stringify(expected)) fail(`tool list was ${names.join(', ')}`);
 
   const call = await request('tools/call', {
@@ -83,7 +93,28 @@ try {
   const analysisText = analysis.content?.[0]?.text ?? '';
   if (!analysisText.includes('crc16/modbus')) fail(`checksum detection regressed:\n${analysisText}`);
 
-  console.log('mcp smoke test passed: handshake, 6 tools, list_flows and detect_checksums answered');
+  const recovery = await request('tools/call', {
+    name: 'recover_checksum_parameters',
+    arguments: { capture: resolve('captures/custom-crc.pcap') },
+  });
+  const recoveryText = recovery.content?.[0]?.text ?? '';
+  if (!recoveryText.includes('0x8f57')) fail(`CRC parameter recovery regressed:\n${recoveryText}`);
+
+  const semantics = await request('tools/call', {
+    name: 'explain_semantics',
+    arguments: { capture: resolve('captures/text-session.pcap') },
+  });
+  const semanticsText = semantics.content?.[0]?.text ?? '';
+  if (!semanticsText.includes('PING')) fail(`payload semantics regressed:\n${semanticsText}`);
+
+  const trace = await request('tools/call', {
+    name: 'trace_conversation',
+    arguments: { capture: resolve('captures/modbus-session.pcap') },
+  });
+  const traceText = trace.content?.[0]?.text ?? '';
+  if (!traceText.includes('type=0x84')) fail(`conversation pairing regressed:\n${traceText}`);
+
+  console.log('mcp smoke test passed: handshake, 9 tools, and five tool calls answered');
   child.kill();
   process.exit(0);
 } catch (error) {

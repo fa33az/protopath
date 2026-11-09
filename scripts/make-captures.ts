@@ -28,6 +28,7 @@ function main(): void {
   writePcap(join(out, 'binary-session-v2.pcap'), binarySessionV2());
   writePcap(join(out, 'text-session.pcap'), textSession());
   writePcap(join(out, 'sensor-udp.pcap'), sensorSession());
+  writePcap(join(out, 'custom-crc.pcap'), customChecksumSession());
 
   console.log(`wrote captures to ${out}`);
 }
@@ -206,6 +207,66 @@ function sensorSession(): PcapRecord[] {
   return frames;
 }
 
+// The polynomial and initial value below are not in any published catalogue. That is the point
+// of this fixture: nothing named matches it, so the only way to describe the check field is to
+// solve for it from the messages. The parameters are still recoverable exactly.
+const CUSTOM_POLY = 0x8f57;
+const CUSTOM_INIT = 0x1234;
+
+function crc16Custom(data: Buffer): number {
+  let crc = CUSTOM_INIT;
+  for (const byte of data) {
+    let value = byte;
+    let reflected = 0;
+    for (let bit = 0; bit < 8; bit++) {
+      reflected = (reflected << 1) | (value & 1);
+      value >>= 1;
+    }
+    crc ^= reflected << 8;
+    for (let bit = 0; bit < 8; bit++) crc = crc & 0x8000 ? ((crc << 1) ^ CUSTOM_POLY) & 0xffff : (crc << 1) & 0xffff;
+  }
+  let out = 0;
+  for (let bit = 0; bit < 16; bit++) out = (out << 1) | ((crc >> bit) & 1);
+  return out & 0xffff;
+}
+
+/** Layout: length(2 BE, total - 2) sequence(2 BE) type(1) payload(n) checksum(2 LE). */
+function encodeCustom(sequence: number, type: number, payload: Buffer): Buffer {
+  const total = 5 + payload.length + 2;
+  const message = Buffer.alloc(total);
+  message.writeUInt16BE(total - 2, 0);
+  message.writeUInt16BE(sequence & 0xffff, 2);
+  message.writeUInt8(type, 4);
+  payload.copy(message, 5);
+  message.writeUInt16LE(crc16Custom(message.subarray(0, total - 2)), total - 2);
+  return message;
+}
+
+const CUSTOM_KEYS = ['uptime', 'mode', 'serial', 'gain', 'led', 'channel', 'rate', 'threshold'];
+const CUSTOM_VALUES = ['40213', 'auto', 'SN-0042', '0.5', 'on', '11', '48000', '0.62'];
+
+function customChecksumSession(): PcapRecord[] {
+  const frames: PcapRecord[] = [];
+  let ts = 1_780_400_000.0;
+  let clientSeq = 3000;
+  let serverSeq = 4000;
+  const advance = (): number => (ts += 0.006);
+
+  for (let round = 0; round < 10; round++) {
+    const key = CUSTOM_KEYS[round % CUSTOM_KEYS.length]!;
+    const value = CUSTOM_VALUES[round % CUSTOM_VALUES.length]!;
+
+    const request = encodeCustom(round + 1, 0x21, Buffer.from(key));
+    frames.push(...tcpExchange('10.0.0.50', 44000, '10.0.0.60', 7404, clientSeq, serverSeq, request, advance));
+    clientSeq += request.length;
+
+    const response = encodeCustom(0x400 + round, 0x22, Buffer.from(`${key}=${value}`));
+    frames.push(...tcpExchange('10.0.0.60', 7404, '10.0.0.50', 44000, serverSeq, clientSeq, response, advance));
+    serverSeq += response.length;
+  }
+
+  return frames;
+}
 // ---------------------------------------------------------------------------
 // packet building
 // ---------------------------------------------------------------------------

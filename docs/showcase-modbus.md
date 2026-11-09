@@ -62,6 +62,36 @@ The distinction between `reserved` and "protocol identifier" is real: a field th
 is a constant, and calling it a protocol identifier would be a claim the bytes do not support.
 The report says `reserved` and the reader supplies the name.
 
+## What the later layers said about the same bytes
+
+The field table is only the start. On this capture the layers above it each produced something
+checkable:
+
+**Family.** Modbus/TCP, confidence 0.95, from four structural signals: the MBAP length bias at
+offset 4, `0x0000` at bytes 2–4, a constant unit identifier at byte 6, and function codes in
+range. Port 502 is not one of them — it happens to be the registered port here, and the label
+would be the same on any port.
+
+**Grammar.** Fifteen requests, fifteen responses, no unpaired message, median round trip 1.18 ms.
+The pairing is what surfaces the one operation the PLC rejected:
+
+```
+10  type=0x04  type=0x84  1.18 ms
+```
+
+`0x84` is function code `0x04` with the Modbus error bit set. protopath has no idea what a
+Modbus exception is; it paired an exchange and the byte appeared.
+
+**Semantics.** The transaction identifier is a counter, the protocol identifier and unit
+identifier are constants, the length field is a length (it equals message length minus six, which
+the semantics pass checks directly rather than inferring from the framing), and the function code
+is a `range` — eight distinct values across fifteen messages, no shape beyond that. The tool does
+not claim to know what the codes mean.
+
+```console
+$ protopath trace captures/modbus-session.pcap
+```
+
 ## What this capture exposed
 
 Recording real traffic found three defects that the synthetic fixtures could not: the packet

@@ -176,7 +176,7 @@ test('the generated Python client carries the checksum inverse it detected', () 
   assert.match(python, /def decode\(buffer: bytes\)/);
   assert.match(python, /def encode\(message: Message\) -> bytes/);
   assert.match(python, /def compute_checksum\(data: bytes\) -> int/);
-  assert.match(python, /_crc16_reflected/);
+  assert.match(python, /_crc_compute\(data, 16, 0x8005, 0xffff, True, True, 0x0\)/);
   assert.match(python, /HEADER_LENGTH = 6/);
 });
 

@@ -14,7 +14,8 @@ const HELP = `protopath ${VERSION} — infer protocol structure from a capture
 
 usage
   protopath flows  <capture>                  list conversations in a capture
-  protopath analyze <capture>                 infer framing, fields and checksums
+  protopath analyze <capture>                 framing, fields, checksums, semantics, families
+  protopath trace  <capture>                  pair requests with responses and show latency
   protopath emit   <capture> [--out <dir>]    write dissector, clients, fuzzer and report
   protopath diff   <captureA> <captureB>      compare two inferred layouts
   protopath setup  [--yes]                    register the MCP server with an agent
@@ -58,6 +59,8 @@ function main(argv: string[]): number {
       return commandFlows(args.positional[0], args.flags);
     case 'analyze':
       return commandAnalyze(args.positional[0], args.flags);
+    case 'trace':
+      return commandTrace(args.positional[0], args.flags);
     case 'emit':
       return commandEmit(args.positional[0], args.flags);
     case 'diff':
@@ -139,6 +142,46 @@ function commandAnalyze(path: string | undefined, flags: Map<string, string | tr
   }
 
   return confident(analysis) ? 0 : 3;
+}
+
+function commandTrace(path: string | undefined, flags: Map<string, string | true>): number {
+  const analysis = analyzeFile(requireCapture(path), analysisOptions(flags));
+  const primary = analysis.flows[0];
+  if (!primary) {
+    console.error('no flow to trace');
+    return 1;
+  }
+
+  const grammar = primary.grammar;
+  if (flagBool(flags, 'json')) {
+    console.log(JSON.stringify({ flow: primary.flow.key, ...grammar }, null, 2));
+    return 0;
+  }
+
+  console.log(`${primary.flow.key} — ${grammar.exchanges.length} exchange(s)`);
+  if (grammar.latency) {
+    console.log(
+      `latency  min ${grammar.latency.minMs.toFixed(2)} ms   median ${grammar.latency.medianMs.toFixed(2)} ms   ` +
+        `max ${grammar.latency.maxMs.toFixed(2)} ms   over ${grammar.latency.count} round trip(s)`,
+    );
+  }
+  console.log('');
+
+  const rows = grammar.exchanges.slice(0, 40).map((exchange) => [
+    String(exchange.index),
+    exchange.request.label,
+    exchange.response ? exchange.response.label : '(none)',
+    exchange.latencyMs === null ? '—' : `${exchange.latencyMs.toFixed(2)} ms`,
+  ]);
+  if (rows.length > 0) printTable(['#', 'request', 'response', 'latency'], rows);
+
+  if (grammar.handshake.length > 0) {
+    console.log('\nhandshake — never repeats later, so a replay starts here:');
+    for (const step of grammar.handshake) console.log(`  ${step}`);
+  }
+
+  for (const note of grammar.notes) console.log(`note: ${note}`);
+  return 0;
 }
 
 function commandEmit(path: string | undefined, flags: Map<string, string | true>): number {
