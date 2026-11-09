@@ -304,6 +304,49 @@ test('the report carries the new layers', () => {
   assert.match(report, /Field semantics/);
 });
 
+test('the recovered parameters drive the generated Python client too', (t) => {
+  const python = findPython();
+  if (!python) {
+    t.skip('no python interpreter on this machine');
+    return;
+  }
+
+  const flow = analyzeFile(capture('custom-crc.pcap')).flows[0]!;
+  const workDir = mkdtempSync(join(tmpdir(), 'protopath-recovered-py-'));
+  writeFileSync(join(workDir, 'client.py'), emitClient(flow, 'python'), 'utf8');
+  writeFileSync(
+    join(workDir, 'run.py'),
+    [
+      'import warnings',
+      'warnings.simplefilter("error")', // a Windows path inside the docstring would surface here
+      'from client import decode, encode, verify',
+      `raw = bytes.fromhex("${flow.forward.messages[0]!.bytes.toString('hex')}")`,
+      'message = decode(raw)',
+      'assert message is not None, "decode returned None"',
+      'assert verify(raw), "recovered checksum rejected a good message"',
+      'assert encode(message) == raw, "round trip changed the bytes"',
+      'broken = bytearray(raw)',
+      'broken[-1] ^= 0xFF',
+      'assert not verify(bytes(broken)), "corrupted message was accepted"',
+      'print("ok")',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const run = spawnSync(python, ['run.py'], { cwd: workDir, encoding: 'utf8' });
+  assert.equal(run.status, 0, `the recovered Python client failed:\n${run.stdout}\n${run.stderr}`);
+  assert.match(run.stdout, /ok/);
+});
+
+/** First working interpreter, so the suite runs on Linux (python3) and Windows (python). */
+function findPython(): string | null {
+  for (const candidate of ['python3', 'python']) {
+    const probe = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
+    if (probe.status === 0) return candidate;
+  }
+  return null;
+}
+
 test('semantics degenerates cleanly on too little data', () => {
   const semantics = inferSemantics([Buffer.from([1, 2])], []);
   assert.equal(semantics.domains.length, 0);
