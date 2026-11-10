@@ -363,6 +363,17 @@ check('the CRC document states what ranks two parameter sets that both fit', () 
   }
 });
 
+check('the reader is documented as handling both pcapng byte orders', () => {
+  if (!read('README.md').includes('either section byte order')) {
+    throw new Error('the README does not state the pcapng byte-order support');
+  }
+  if (!read(join('src', 'core', 'pcap', 'reader.ts')).includes("c.u32(endian)")) {
+    throw new Error('the README claims both byte orders and the reader assumes one');
+  }
+  const test = read(join('tests', 'pcapng-endian.test.ts'));
+  if (!test.includes("'be'")) throw new Error('no test writes a big-endian capture');
+});
+
 // --- report ------------------------------------------------------------------------------
 
 for (const name of passes) console.log(`ok    ${name}`);

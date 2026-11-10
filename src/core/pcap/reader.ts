@@ -140,7 +140,12 @@ function parsePcapng(buf: Buffer): RawCapture {
 
   while (c.remaining >= 12) {
     const start = c.offset;
-    const rawType = c.u32('le');
+    // Block types are written in the section's byte order, so a big-endian IDB is `00 00 00 01`
+    // and reads little-endian as `0x01000000`. Reading the type as little-endian regardless meant
+    // every block after a big-endian section header failed the type test and was skipped, and the
+    // capture came back empty with no warning. The section header type is a palindrome, so this
+    // still recognises a section header written in the byte order of the section before it.
+    const rawType = c.u32(endian);
 
     if (rawType === PCAPNG_SHB) {
       // The byte-order magic sits at offset 8, after the type and the block length, so the
