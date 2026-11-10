@@ -323,8 +323,13 @@ check('the corpus size in the document matches the generator default', () => {
 check('CI runs the proprietary benchmark with a floor', () => {
   const ci = read(join('.github', 'workflows', 'ci.yml'));
   if (!ci.includes('proprietary-bench.mjs')) throw new Error('CI does not run the proprietary benchmark');
-  if (!ci.includes('PROPRIETARY_FLOOR')) throw new Error('CI runs the benchmark without a regression floor');
+  const floor = ci.match(/PROPRIETARY_FLOOR: '(\d+)'/);
+  if (!floor) throw new Error('CI runs the benchmark without a regression floor');
   if (!proprietaryDoc.includes('PROPRIETARY_FLOOR')) throw new Error('the document does not mention the floor');
+  // The floor written in the document must be the one CI enforces, or the document is a wish.
+  if (!proprietaryDoc.includes(`below ${floor[1]} passing checks`)) {
+    throw new Error(`CI enforces a floor of ${floor[1]} and the document states a different one`);
+  }
 });
 
 check('the field roles in the README match the union in the source', () => {

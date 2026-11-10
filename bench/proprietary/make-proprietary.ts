@@ -330,8 +330,16 @@ function drawFraming(random: Random): Framing {
   return { kind: 'unframed' };
 }
 
-function drawProtocol(seed: number): ProtocolSpec {
-  const random = new Random(seed);
+/**
+ * Draws one protocol from a seed.
+ *
+ * `attempt` exists so a protocol whose framing bytes cannot be placed unambiguously can be redrawn
+ * as a whole: the collision is usually in the header, which no amount of fresh payload can move.
+ * Attempt 0 is the seed's own draw, so a corpus generated before this retry existed keeps its
+ * captures byte for byte.
+ */
+function drawProtocol(seed: number, attempt = 0): ProtocolSpec {
+  const random = new Random(attempt === 0 ? seed : seed * 7919 + attempt * 104_729 + 13);
   const transport = random.chance(80) ? 'tcp' : 'udp';
   const framing = drawFraming(random);
   const header = drawHeader(random, framing);
@@ -559,6 +567,45 @@ function checksumName(kind: ChecksumKind): string {
   return match ? match.name : `crc-private-${kind.params.width}/0x${kind.params.poly.toString(16)}`;
 }
 
+interface Built {
+  spec: ProtocolSpec;
+  records: PcapRecord[];
+  lengths: number[];
+  headerLength: number;
+  checksumOffsetFromEnd: number;
+}
+
+/** Renders every message of one protocol and frames it onto the wire. */
+function buildCapture(seed: number, spec: ProtocolSpec): Built {
+  const random = new Random(seed * 7919 + 13);
+  const records: PcapRecord[] = [];
+  const lengths: number[] = [];
+
+  let seq = 1000 + seed;
+  const clientIp = `10.${(seed >> 8) & 0xff}.${seed & 0xff}.10`;
+  const serverIp = `10.${(seed >> 8) & 0xff}.${seed & 0xff}.20`;
+  const clientPort = 30000 + seed;
+  const serverPort = 20000 + seed;
+
+  let headerLength = 0;
+  let checksumOffsetFromEnd = 0;
+  for (let i = 0; i < spec.messageCount; i++) {
+    const rendered = render(spec, random, i);
+    headerLength = rendered.headerLength;
+    checksumOffsetFromEnd = rendered.checksumOffsetFromEnd;
+    lengths.push(rendered.message.length);
+
+    const frame =
+      spec.transport === 'tcp'
+        ? tcpFrame(clientIp, clientPort, serverIp, serverPort, seq, 5000, rendered.message)
+        : udpFrame(clientIp, clientPort, serverIp, serverPort, rendered.message);
+    if (spec.transport === 'tcp') seq += rendered.message.length;
+    records.push({ ts: 1_760_000_000 + seed * 100 + i * 0.001, data: frame });
+  }
+
+  return { spec, records, lengths, headerLength, checksumOffsetFromEnd };
+}
+
 function main(): void {
   verifySelfCheck();
 
@@ -569,32 +616,18 @@ function main(): void {
   const entries: ManifestEntry[] = [];
 
   for (let seed = 1; seed <= count; seed++) {
-    const spec = drawProtocol(seed);
-    const random = new Random(seed * 7919 + 13);
-    const records: PcapRecord[] = [];
-    const lengths: number[] = [];
-
-    let seq = 1000 + seed;
-    const clientIp = `10.${(seed >> 8) & 0xff}.${seed & 0xff}.10`;
-    const serverIp = `10.${(seed >> 8) & 0xff}.${seed & 0xff}.20`;
-    const clientPort = 30000 + seed;
-    const serverPort = 20000 + seed;
-
-    let headerLength = 0;
-    let checksumOffsetFromEnd = 0;
-    for (let i = 0; i < spec.messageCount; i++) {
-      const rendered = render(spec, random, i);
-      headerLength = rendered.headerLength;
-      checksumOffsetFromEnd = rendered.checksumOffsetFromEnd;
-      lengths.push(rendered.message.length);
-
-      const frame =
-        spec.transport === 'tcp'
-          ? tcpFrame(clientIp, clientPort, serverIp, serverPort, seq, 5000, rendered.message)
-          : udpFrame(clientIp, clientPort, serverIp, serverPort, rendered.message);
-      if (spec.transport === 'tcp') seq += rendered.message.length;
-      records.push({ ts: 1_760_000_000 + seed * 100 + i * 0.001, data: frame });
+    // A header can contain the protocol's own terminator, and then no capture of it can be split.
+    // That is a broken protocol, not a hard one, so the whole draw is retried rather than scored.
+    let built: Built | null = null;
+    for (let attempt = 0; attempt < 12 && built === null; attempt++) {
+      try {
+        built = buildCapture(seed, drawProtocol(seed, attempt));
+      } catch (error) {
+        if (attempt === 11) throw error;
+      }
     }
+    if (built === null) throw new Error(`no drawable protocol for seed ${seed}`);
+    const { spec, records, lengths, headerLength, checksumOffsetFromEnd } = built;
 
     writePcap(join(out, `${spec.name}.pcap`), records);
 

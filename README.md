@@ -272,8 +272,8 @@ tool has never seen — and scores six questions per capture, sorting every miss
 the tool reported):
 
 ```
-boundaries    90.8%   family      71.7%   lengthField  41.1% strict,  6.8% wrong
-header        65.1%   counter     55.0%   checksum     75.2%
+boundaries    94.4%   family      73.3%   lengthField  40.8% strict,  6.6% wrong
+header        65.7%   counter     57.4%   checksum     77.8%
 ```
 
 That benchmark found and fixed eight defects, three of them in its own corpus. The method, the

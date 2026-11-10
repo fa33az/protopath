@@ -61,7 +61,7 @@ jobs:
       - name: Benchmark against proprietary protocols drawn from a seed
         if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
         env:
-          PROPRIETARY_FLOOR: '428'
+          PROPRIETARY_FLOOR: '438'
         run: node scripts/proprietary-bench.mjs
 
       - name: Verify the package contents

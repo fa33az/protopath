@@ -86,17 +86,17 @@ captures:
 
 | Question | Scored | Hit | Ambiguous | Wrong | Strict | Wrong |
 |---|---:|---:|---:|---:|---:|---:|
-| boundaries | 109 | 99 | 0 | 10 | 90.8% | 9.2% |
-| family | 120 | 86 | 16 | 18 | 71.7% | 15.0% |
-| lengthField | 73 | 30 | 38 | 5 | 41.1% | 6.8% |
-| header | 109 | 71 | 0 | 38 | 65.1% | 34.9% |
-| counter | 109 | 60 | 19 | 30 | 55.0% | 27.5% |
-| checksum | 109 | 82 | 1 | 26 | 75.2% | 23.9% |
-| **all** | **629** | **428** | **74** | **127** | — | — |
+| boundaries | 108 | 102 | 0 | 6 | 94.4% | 5.6% |
+| family | 120 | 88 | 18 | 14 | 73.3% | 11.7% |
+| lengthField | 76 | 31 | 40 | 5 | 40.8% | 6.6% |
+| header | 108 | 71 | 0 | 37 | 65.7% | 34.3% |
+| counter | 108 | 62 | 18 | 28 | 57.4% | 25.9% |
+| checksum | 108 | 84 | 1 | 23 | 77.8% | 21.3% |
+| **all** | **628** | **438** | **77** | **113** | — | — |
 
-Read the `wrong` column, not the `strict` one. Boundaries are right on 90.8% of captures; nearly all
+Read the `wrong` column, not the `strict` one. Boundaries are right on 94.4% of captures; nearly all
 of the rest are captures where a delimiter parse and a marker parse disagree about the same byte
-offsets. The length field is `wrong` on 5 of 73; the other 38 misses are a 16-bit length whose high
+offsets. The length field is `wrong` on 5 of 76; 40 of the 45 misses are a 16-bit length whose high
 byte never moves in the capture, which is byte-for-byte identical to an 8-bit length one byte
 later.
 
@@ -112,12 +112,12 @@ the current corpus, so it measures the fix together with everything else that la
 
 | Defect | Fixed by | Now |
 |---|---|---|
-| the header walk stopped at the first byte it could not name, and everything after it became payload | every column of the common prefix is classified first and named second; a short unnamed run is reported as `unknown` instead of ending the header | header 65.1% |
-| the length field was searched only in the first 8 bytes of a message, so a header with a magic, version, type and counter put it out of reach | search window extended to 16 bytes | lengthField 41.1% strict, 6.8% wrong |
-| a wide counter was only recognised when it stepped by exactly 1, so an offset field advancing by 24 per record was rejected | any constant step is a counter, at one byte or wider | counter 55.0% |
+| the header walk stopped at the first byte it could not name, and everything after it became payload | every column of the common prefix is classified first and named second; a short unnamed run is reported as `unknown` instead of ending the header | header 65.7% |
+| the length field was searched only in the first 8 bytes of a message, so a header with a magic, version, type and counter put it out of reach | search window extended to 16 bytes | lengthField 40.8% strict, 6.6% wrong |
+| a wide counter was only recognised when it stepped by exactly 1, so an offset field advancing by 24 per record was rejected | any constant step is a counter, at one byte or wider | counter 57.4% |
 | `timestamp` was a documented value domain that no capture could produce | a four-byte field in the epoch range that advances by a constant amount is a timestamp | scored, never wrong |
 | a delimited text protocol produced a single `text` field and no header model at all | the byte model runs on text protocols too, and the body is labelled `text` where the header ends | header scored |
-| `0x0a` and `0x0d0a` parses both consumed the stream, and the shorter one split at every `0x0a` inside a checksum | a terminator whose occurrences are a subset of a longer one wins | family 71.7% |
+| `0x0a` and `0x0d0a` parses both consumed the stream, and the shorter one split at every `0x0a` inside a checksum | a terminator whose occurrences are a subset of a longer one wins | family 73.3% |
 | a coarse parse that treats real terminators as payload could outrank the delimiter parse that explains them | competing parses lose score in proportion to the terminators they split through | family |
 | a counter's byte order was whichever the loop tried first, so a big-endian counter read as little-endian scored a step of 256 | both orders are tried and the smaller step wins | counter |
 
@@ -126,26 +126,26 @@ against a corpus whose markers and terminators were never written, and against o
 recorded with a byte order the bytes cannot show. A benchmark that lies about its own answers
 measures the lie.
 
-The corpus changed twice while these fixes landed, so no column here is a controlled before and
-after on identical input. The one series worth quoting: the header question was at 29.7% when the
-corpus first told the truth, and it is at 65.1% now.
+The corpus changed more than once while these fixes landed, so no column here is a controlled
+before and after on identical input. The one series worth quoting: the header question was at
+29.7% when the corpus first told the truth, and it is at 65.7% now.
 
 ## Known limits this benchmark makes visible
 
 These are not on the fix list because the bytes do not decide them. They are reported as
 `ambiguous`, and the tool says so in the report:
 
-1. **A length field whose high bytes never move.** 38 of 43 length-field misses. The reading is
+1. **A length field whose high bytes never move.** 40 of 45 length-field misses. The reading is
    pinned by a width prior — 16-bit first, then 8-bit, then 32-bit — because 16-bit lengths are the
    common case in published protocols (Modbus, DNS, RADIUS); a capture with one message long enough
    to set the high byte resolves it.
-2. **A marker that is also the message prefix plus a terminator.** 16 family misses. Both splits
+2. **A marker that is also the message prefix plus a terminator.** 18 family misses. Both splits
    produce identical boundaries, so the family name is a coin toss and the report says a competing
    parse splits at exactly the same offsets.
-3. **A two-byte counter whose high byte is constant across the capture.** 19 counter misses: the
+3. **A two-byte counter whose high byte is constant across the capture.** 18 counter misses: the
    tool reports the two-byte reading, which covers the same bytes at the same offset, and the
    scorer calls that ambiguous rather than wrong.
-4. **Where the header ends after the message type.** 38 header misses, the largest remaining
+4. **Where the header ends after the message type.** 37 header misses, the largest remaining
    bucket. In Modbus the body starts right after the function code; in a private protocol a flags
    byte and a reserved byte may sit after the type and before the body. The rule used is: a short
    constant run after the type is header only when a length or stepping field follows it, or when
@@ -154,6 +154,6 @@ These are not on the fix list because the bytes do not decide them. They are rep
 
 ## Regression floor
 
-CI runs the corpus and fails below 428 passing checks (`PROPRIETARY_FLOOR`). The floor is a
+CI runs the corpus and fails below 438 passing checks (`PROPRIETARY_FLOOR`). The floor is a
 regression guard, not a target: raise it when a rule improves, never lower it to make a run green.
 The captures are generated in CI, so the seed set cannot drift between runs.
