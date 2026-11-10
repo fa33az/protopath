@@ -108,6 +108,21 @@ export function recoverCrc(messages: Buffer[], options: CrcRecoveryOptions = {})
   let budget = options.budget ?? 400_000;
   const found: CrcRecovery[] = [];
 
+  // How many independent derivations produced each parameter set. A polynomial that is really the
+  // protocol's is reached from several layouts, byte orders and differentiating pairs; one that
+  // only fits because init absorbed the difference is reached from fewer. This is the only
+  // evidence available that separates two sets which both reproduce every captured message, and
+  // it beats ordering by coefficient size, which is what this did before.
+  const support = new Map<string, number>();
+  const keyOf = (candidate: CrcRecovery): string =>
+    [
+      candidate.params.width,
+      candidate.params.poly,
+      Number(candidate.params.refin),
+      Number(candidate.params.refout),
+      candidate.endian,
+    ].join(':');
+
   for (const width of widths) {
     const mask = width === 16 ? 0xffff : 0xff;
     const fieldBytes = width / 8;
@@ -162,7 +177,10 @@ export function recoverCrc(messages: Buffer[], options: CrcRecoveryOptions = {})
           for (const endian of ['le', 'be'] as const) {
             for (const refout of [false, true]) {
               const verified = verifyCandidate(eligible, layout, width, endian, { width, poly, init: 0, refin, refout, xorout: 0 });
-              if (verified) found.push(verified);
+              if (!verified) continue;
+              const key = keyOf(verified);
+              support.set(key, (support.get(key) ?? 0) + 1);
+              found.push(verified);
             }
           }
         }
@@ -170,7 +188,18 @@ export function recoverCrc(messages: Buffer[], options: CrcRecoveryOptions = {})
     }
   }
 
-  return dedupe(found).sort((x, y) => y.matches - x.matches || x.params.width - y.params.width || x.params.poly - y.params.poly);
+  // Ordering is evidence first. Every set below reproduces every captured message, so the bytes
+  // in this capture cannot separate them; what can is how many independent derivations arrived at
+  // the same answer. Ordering by the smallest polynomial put a degenerate 8-bit set in front of the
+  // protocol's real 16-bit one on 10 of 60 private polynomials, and the generated client embedded
+  // it. Width is the next tiebreak: a 16-bit check field is the common case, and the field bytes
+  // have already been read as one.
+  return dedupe(found).sort(
+    (x, y) =>
+      (support.get(keyOf(y)) ?? 0) - (support.get(keyOf(x)) ?? 0) ||
+      y.params.width - x.params.width ||
+      x.params.poly - y.params.poly,
+  );
 }
 
 /**

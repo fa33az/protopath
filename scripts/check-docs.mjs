@@ -349,6 +349,20 @@ check('the proprietary corpus is not committed', () => {
   if (!ignore.includes('bench/proprietary/corpus/')) throw new Error('the generated corpus would be committed');
 });
 
+check('the CRC document states what ranks two parameter sets that both fit', () => {
+  const crcDoc = read(join('docs', 'crc-recovery.md'));
+  const source = read(join('src', 'core', 'infer', 'crc-recovery.ts'));
+  if (!crcDoc.includes('independent derivations')) {
+    throw new Error('the document does not say how competing parameter sets are ordered');
+  }
+  if (!source.includes('support.get')) {
+    throw new Error('the document describes a ranking the source does not implement');
+  }
+  if (!read('README.md').includes('most independent derivations')) {
+    throw new Error('the README does not mention the ranking rule');
+  }
+});
+
 // --- report ------------------------------------------------------------------------------
 
 for (const name of passes) console.log(`ok    ${name}`);
