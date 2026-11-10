@@ -31,7 +31,8 @@ describes the build as it was at `e5462f4`. What has changed since:
 | 3.2 the `timestamp` value domain is unreachable | **fixed.** A four-byte field in the epoch window that advances by a constant amount is now a `timestamp` field, and the semantics pass labels the domain at 0.85. The proprietary benchmark scores it. |
 | 3.3 a field that steps by a constant other than one ends the header | **fixed.** Every column of the common prefix is classified before it is named, so a stride other than one is a `sequence` field and the header continues. |
 | 3.1 CRC recovery tiebreak | **fixed.** Candidates are ranked by how many independent derivations reached them, not by the smallest polynomial; `probe-crc4.mjs` now reports the true set first on 60 of 60 private polynomials, and `probe-e2e.mjs` reports 0 of 8 unseen bodies wrong instead of 8 of 8. The duplicate-candidate half of this finding is still open. |
-| 2.1–2.4 emitted clients, 1.1–1.5 decoder and reassembly | open. The ranked fix plan at the end of this document is unchanged. |
+| 1.1 a big-endian pcapng parses as an empty capture | **fixed.** Block types are read in the section's byte order, so a big-endian section no longer skips every block after its header. `probe-net.mjs` now reports 2 records instead of 0, and `tests/pcapng-endian.test.ts` pins both orders to the same frames. |
+| 2.1–2.4 emitted clients, 1.2–1.5 decoder and reassembly | open. The ranked fix plan at the end of this document is unchanged. |
 
 The probe scripts still run and still fail the way they describe, except `probe-time.mjs`, which
 now reports a `timestamp` field for a jittered clock — the point of keeping the probes is that the

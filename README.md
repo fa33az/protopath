@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/fa33az/protopath/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
   <a href="https://github.com/fa33az/protopath/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fa33az/protopath/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-85%20passing-2ea043?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-88%20passing-2ea043?style=flat-square">
   <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A520.19-339933?style=flat-square&logo=node.js&logoColor=white">
   <img alt="mcp" src="https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square">
   <img alt="captures" src="https://img.shields.io/badge/capture-pcap%20%C2%B7%20pcapng-cb3837?style=flat-square">
@@ -173,7 +173,7 @@ Read the full method, including the scoring formulas and the symptom-to-cause ta
 |---|---|---|
 | pcap, microsecond | frames, flows, bytes | classic format |
 | pcap, nanosecond | frames, flows, bytes | `0xa1b23c4d` magic |
-| pcapng | frames, flows, bytes | SHB/IDB/EPB/SPB, per-interface `if_tsresol` |
+| pcapng | frames, flows, bytes | SHB/IDB/EPB/SPB, per-interface `if_tsresol`, either section byte order |
 | Ethernet | MAC → IP → transport | VLAN and QinQ tags skipped correctly |
 | Raw IP, Linux SLL, null/loopback | IP → transport | link types 101, 113, 0 |
 | IPv4 | TCP, UDP payloads | non-first fragments skipped and counted |
@@ -546,7 +546,7 @@ test suite. The manifest states the expected framing, checksum and family before
 inference rules, all listed in [the benchmark document](docs/benchmark.md#what-the-benchmark-changed).
 
 The fixtures are the other half: six protocols with documented layouts — five synthetic, one
-recorded from pymodbus - and 85 tests that fail when the inference changes.
+recorded from pymodbus - and 88 tests that fail when the inference changes.
 
 ## Documentation
 
@@ -564,7 +564,7 @@ recorded from pymodbus - and 85 tests that fail when the inference changes.
 ```console
 $ npm install
 $ npm run captures   # regenerate captures/ deterministically
-$ npm test           # build and run 85 tests
+$ npm test           # build and run 88 tests
 $ npm run bench      # score the inference against the unseen-protocol corpus
 $ npm run profile    # time each stage on a capture larger than the fixtures
 ```
