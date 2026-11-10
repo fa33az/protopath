@@ -105,51 +105,48 @@ fields. Check the runner-up.
 
 Input: the messages from the winning segmentation, plus the length-field parameters.
 
-Single-offset statistics across all messages:
+Only the common prefix of every message can carry a head field: past it, the shortest message has
+no byte to read. Every column of that prefix is classified first and named second, because a walk
+that stops at the first byte it cannot name throws the rest of the header into the payload — that
+single behaviour cost this model more accuracy than every other rule combined.
 
 | Observation | Primitive |
 |---|---|
+| inside the length-field span | `length` |
 | all messages equal | `const` |
-| strictly `+1 mod 256` between consecutive messages | `counter` |
+| a constant non-zero step mod 256 (1, 1, 1 or 24, 24, 24) | `step` |
+| distinct count under `max(4, 60% of messages)` | `set` |
 | otherwise | `var` |
 
-Printable runs are deliberately **not** a primitive. A variable ASCII run inside a binary-framed
-message is data: a constant word is already captured as `const` and relabelled as text by the
-semantics pass, while a variable one is the start of the payload. Treating it as a header field
-invents a boundary that is not there — the mistake this rule exists to prevent is a "text" field
-swallowing the first four characters of every command word.
+Named left to right, each rule requiring evidence the one before it did not:
 
-Before grouping, wide counters are searched: widths 2 and 4 at offsets inside the first 24 bytes,
-both endiannesses, requiring distinct values and exact `+1` steps modulo the width. This runs
-first because a two-byte little-endian counter otherwise looks like a constant byte followed by a
-stepping byte. Offsets are tried low to high and widths narrow to wide, so the reported field is
-the smallest reading the data supports: a counter whose upper bytes never moved is reported as
-2 bytes, not 4.
-
-Grouping, left to right:
-
-1. Leading constant run of up to 4 bytes → `magic`.
-2. The length field span → `length`.
-3. A wide counter span → `sequence` (2 or 4 bytes).
-4. Single-byte stepping → `sequence` (1 byte, confidence 0.88).
-5. Constant run → `reserved`.
-6. A `var` offset becomes `type` when its value repeats enough to be a type rather than data:
-   the distinct count must stay under `max(6, 75% of messages)`, and the byte must not be
-   printable in every message — the first letter of a command word varies like a type and is not
-   one. A 2-byte reading wins over a 1-byte one only when pairing the bytes actually shrinks the
-   alphabet, which is what a 16-bit type does and what "type plus the first data byte" does not.
-   At most one type field per direction is accepted; a second low-cardinality byte is data that
-   happens to repeat.
-7. After the type, only a counter is accepted. A constant or printable run there is payload that
-   happens to repeat, and the header ends.
-8. Anything else ends the header; the remainder is `payload`.
+1. The length-field span → `length`.
+2. A field wider than one byte, at this offset → `sequence`, or `timestamp` when four bytes land in
+   the epoch window. The requirement is a constant positive step, not a step of one: a byte offset
+   advancing by 24 per record is an ordinary field. Both byte orders are tried and the reading whose
+   value advances by the smaller amount wins, because a big-endian counter `00 01`, `00 02` read
+   little-endian also steps — by 256.
+3. Four columns that are printable in every message → the body starts here.
+4. A leading constant run → `magic`, at most 4 bytes, and only as far as the run stops being
+   printable: `09 01` followed by `status ok` is a two-byte header on a text body.
+5. A constant run → `reserved`, at most 8 bytes. Longer is padding or a repeated word.
+6. A stepping byte → `sequence`, one byte.
+7. A small alphabet → `type`, at most two per direction. A byte that is printable in every message
+   is never a type: the first letter of a command word varies like one and is not one. A 2-byte
+   reading is preferred only when pairing the bytes shrinks the alphabet.
+8. After a type, only a length, a stepping value, a wide field, or a constant run of at most two
+   bytes that leads straight into one of those — or that leaves a body large enough to be a body —
+   is still header. Modbus answers begin with a constant register high byte that runs into data.
+9. A `var` run of at most 8 bytes → `unknown`, and the walk continues, so a request id that matches
+   nothing no longer hides the length field behind it. A longer run is the body.
 
 A detected checksum is appended as a tail-anchored field at `len - offsetFromEnd - width`, so it
-stays correct when payload lengths vary.
+stays correct when payload lengths vary. When at least 90% of the bytes after the header are
+printable, the body field is `text` rather than `payload`: a terminator-delimited protocol has a
+byte-level header too, and reporting a single text field from offset 0 loses it.
 
-Head fields are inferred from the common prefix only, because bytes past the shortest message are
-different fields in different messages. When message length varies, the report says so and marks
-the payload as variable.
+Head fields come from the common prefix, so when message length varies the report says so and marks
+the body as variable.
 
 **Symptom of a wrong boundary:** a `type` field whose values include implausible noise, or a
 `payload` that starts one byte early. Compare the field table against four hex messages by hand;
@@ -225,6 +222,7 @@ Each numeric field is classified from its decoded values, in this order:
 | one distinct value | `constant` | 0.95 |
 | equals `len - c` for a constant `c`, every message | `length` | 0.90 |
 | role is `counter` | `counter` | 0.95 |
+| role is `timestamp` | `timestamp` | 0.85 |
 | role is `checksum` | `opaque` | 0.95 |
 | only 0 and 1, both present | `boolean` | 0.90 |
 | every byte printable ASCII | `text` | 0.80 |

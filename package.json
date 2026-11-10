@@ -60,7 +60,9 @@
     "check:docs": "node scripts/check-docs.mjs",
     "cli": "node dist/cli/index.js",
     "prepublishOnly": "npm run build && npm run check:docs && npm test",
-    "profile": "npm run build:test && node scripts/profile.mjs"
+    "profile": "npm run build:test && node scripts/profile.mjs",
+    "bench:proprietary:corpus": "npm run build:test && node dist-test/bench/proprietary/make-proprietary.js",
+    "bench:proprietary": "npm run build && node scripts/proprietary-bench.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

@@ -281,6 +281,69 @@ check('the README documents the benchmark and profile commands', () => {
   }
 });
 
+// --- the proprietary corpus ----------------------------------------------------------------
+
+const proprietaryDoc = read(join('docs', 'benchmark-proprietary.md'));
+const generatorSource = read(join('bench', 'proprietary', 'make-proprietary.ts'));
+const scorerSource = read(join('scripts', 'proprietary-bench.mjs'));
+const packageScripts = JSON.parse(read('package.json')).scripts;
+
+check('the proprietary benchmark commands exist', () => {
+  for (const command of ['npm run bench:proprietary:corpus', 'npm run bench:proprietary']) {
+    if (!proprietaryDoc.includes(command)) throw new Error(`the document does not mention "${command}"`);
+    if (!(command.replace('npm run ', '') in packageScripts)) throw new Error(`package.json has no "${command}" script`);
+  }
+});
+
+check('the generator checks its checksums against published values', () => {
+  // The corpus is only worth what its ground truth is worth, and every ground truth here is
+  // computed with one of these implementations.
+  const published = [...generatorSource.matchAll(/'crc[\w/.-]+', \(\) =>/g)];
+  if (published.length < 5) throw new Error(`only ${published.length} self checks found: the generator must verify its CRCs`);
+  if (!generatorSource.includes('verifySelfCheck()')) throw new Error('the self check is never called');
+  if (!proprietaryDoc.includes('checks itself')) throw new Error('the document does not say the generator checks itself');
+});
+
+check('the proprietary scorer separates ambiguity from error', () => {
+  for (const word of ['ambiguous', 'wrong']) {
+    if (!scorerSource.includes(`'${word}'`)) throw new Error(`the scorer never records a ${word} result`);
+  }
+  if (!proprietaryDoc.includes('ambiguous') || !proprietaryDoc.includes('wrong')) {
+    throw new Error('the document does not explain the two bins');
+  }
+});
+
+check('the corpus size in the document matches the generator default', () => {
+  const match = generatorSource.match(/process\.argv\[2\] \?\? (\d+)/);
+  if (!match) throw new Error('the generator has no default corpus size');
+  const size = Number(match[1]);
+  if (!proprietaryDoc.includes(`${size} protocols`)) throw new Error(`the document does not state ${size} protocols`);
+});
+
+check('CI runs the proprietary benchmark with a floor', () => {
+  const ci = read(join('.github', 'workflows', 'ci.yml'));
+  if (!ci.includes('proprietary-bench.mjs')) throw new Error('CI does not run the proprietary benchmark');
+  if (!ci.includes('PROPRIETARY_FLOOR')) throw new Error('CI runs the benchmark without a regression floor');
+  if (!proprietaryDoc.includes('PROPRIETARY_FLOOR')) throw new Error('the document does not mention the floor');
+});
+
+check('the field roles in the README match the union in the source', () => {
+  const fieldsSource = read(join('src', 'core', 'infer', 'fields.ts'));
+  const union = fieldsSource.slice(fieldsSource.indexOf('export type FieldRole'));
+  const block = union.slice(0, union.indexOf(';'));
+  const roles = [...block.matchAll(/'([a-z]+)'/g)].map((match) => match[1]).sort();
+  // The README calls the `opcode` role `type`, because that is what a reader of a protocol sees.
+  const documentedAs = { opcode: 'type' };
+  const documented = new Set([...readme.matchAll(/^\| `([a-z]+)` \| [^|]*\|$/gm)].map((match) => match[1]));
+  const missing = roles.filter((role) => !documented.has(documentedAs[role] ?? role));
+  if (missing.length > 0) throw new Error(`README does not document the field roles: ${missing.join(', ')}`);
+});
+
+check('the proprietary corpus is not committed', () => {
+  const ignore = read('.gitignore');
+  if (!ignore.includes('bench/proprietary/corpus/')) throw new Error('the generated corpus would be committed');
+});
+
 // --- report ------------------------------------------------------------------------------
 
 for (const name of passes) console.log(`ok    ${name}`);

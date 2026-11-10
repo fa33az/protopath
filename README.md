@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/fa33az/protopath/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
   <a href="https://github.com/fa33az/protopath/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fa33az/protopath/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-75%20passing-2ea043?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-82%20passing-2ea043?style=flat-square">
   <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A520.19-339933?style=flat-square&logo=node.js&logoColor=white">
   <img alt="mcp" src="https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square">
   <img alt="captures" src="https://img.shields.io/badge/capture-pcap%20%C2%B7%20pcapng-cb3837?style=flat-square">
@@ -194,10 +194,12 @@ Read the full method, including the scoring formulas and the symptom-to-cause ta
 |---|---|
 | `magic` | identical bytes in every message, at offset 0 |
 | `length` | decoding it reproduces every message length |
-| `sequence` | value steps by exactly 1 per message, 1/2/4 bytes, either endianness |
-| `type` | distinct count under `max(6, 75%)`, at most one per direction |
+| `sequence` | a constant non-zero step per message — 1, or a fixed stride such as 24 for a byte offset — 1/2/4 bytes, either endianness |
+| `timestamp` | 4 bytes in the epoch window, advancing by a constant amount per message |
+| `type` | distinct count under `max(6, 75%)`, at most two per direction |
 | `checksum` | matches every message for a named algorithm, or a recovered parameter set |
-| `reserved` | constant, but not a framing marker |
+| `reserved` | constant, at most 8 bytes, not a framing marker |
+| `unknown` | varies without a model, at most 8 bytes, and only when a named field follows it |
 | `payload` | the remainder, bounded by the framing |
 
 | Checksum family | Names |
@@ -262,6 +264,21 @@ The corpus was written to be failed, and it was: seven inference rules were wron
 three-byte marker swallowing forty-eight messages, a checksum invented from a constant trailer, and
 random buffers clearing the confidence bar 16 times in 40. Each fix is recorded with the symptom
 that produced it in [docs/benchmark.md](docs/benchmark.md).
+
+Twelve hand-written captures still name their own answer. The harder test draws protocols from a
+parameter space — 120 of them, with proprietary CRCs, headers in a random order, and framing the
+tool has never seen — and scores six questions per capture, sorting every miss into *ambiguous*
+(the bytes cannot separate the two readings) or *wrong* (the truth's rule does not reproduce what
+the tool reported):
+
+```
+boundaries    90.8%   family      71.7%   lengthField  41.1% strict,  6.8% wrong
+header        65.1%   counter     55.0%   checksum     75.2%
+```
+
+That benchmark found and fixed eight defects, three of them in its own corpus. The method, the
+numbers and the limits it makes visible are in
+[docs/benchmark-proprietary.md](docs/benchmark-proprietary.md).
 
 ---
 
@@ -527,13 +544,14 @@ test suite. The manifest states the expected framing, checksum and family before
 inference rules, all listed in [the benchmark document](docs/benchmark.md#what-the-benchmark-changed).
 
 The fixtures are the other half: six protocols with documented layouts — five synthetic, one
-recorded from pymodbus — and 75 tests that fail when the inference changes.
+recorded from pymodbus - and 82 tests that fail when the inference changes.
 
 ## Documentation
 
 - [Design](docs/design.md) — the method, the scoring formulas, the failure modes
 - [Audit](docs/audit.md) — eleven defects found by running the build against inputs the tests do not contain
-- [Benchmark](docs/benchmark.md) — twelve unseen protocols, the score, and the defects they found
+- [Benchmark](docs/benchmark.md) - twelve unseen protocols, the score, and the defects they found
+- [Proprietary benchmark](docs/benchmark-proprietary.md) - 120 protocols drawn from a parameter space, and the ambiguity split
 - [CRC recovery](docs/crc-recovery.md) — the algebra, the ambiguity, and a fixture that proves it
 - [Modbus showcase](docs/showcase-modbus.md) — a real capture, and the three defects it exposed
 - [Capture formats](docs/captures.md) — the seven fixture protocols and their ground truth
@@ -544,7 +562,7 @@ recorded from pymodbus — and 75 tests that fail when the inference changes.
 ```console
 $ npm install
 $ npm run captures   # regenerate captures/ deterministically
-$ npm test           # build and run 75 tests
+$ npm test           # build and run 82 tests
 $ npm run bench      # score the inference against the unseen-protocol corpus
 $ npm run profile    # time each stage on a capture larger than the fixtures
 ```

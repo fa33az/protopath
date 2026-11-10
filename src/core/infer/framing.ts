@@ -82,7 +82,7 @@ export function inferFraming(stream: Buffer, options: { maxHypotheses?: number }
     limitations: ['field inference below is not meaningful for an unframed stream'],
   });
 
-  applyMarkerConsistency(results, stream);
+  applyBoundaryConsistency(results, stream);
 
   const bestByShape = new Map<string, FramingHypothesis>();
   for (const hypothesis of results) {
@@ -91,17 +91,34 @@ export function inferFraming(stream: Buffer, options: { maxHypotheses?: number }
     if (!existing || existing.score < hypothesis.score) bestByShape.set(shape, hypothesis);
   }
 
-  const byKind = new Map<FramingKind, number>();
-  const ranked = [...bestByShape.values()]
-    .sort((a, b) => b.score - a.score)
-    .filter((hypothesis) => {
-      // Fixed-size framing always produces several divisors; only the best two are useful.
-      const count = (byKind.get(hypothesis.kind) ?? 0) + 1;
-      byKind.set(hypothesis.kind, count);
-      return hypothesis.kind !== 'fixed' || count <= 2;
-    });
+  const ranked = [...bestByShape.values()].sort((a, b) => b.score - a.score);
 
-  return ranked.slice(0, options.maxHypotheses ?? 4);
+  // Two families can segment a stream identically: a message that starts with a constant marker
+  // and also ends with a terminator reads either way. The ranking has to pick one, so it says
+  // out loud that the other is still standing.
+  for (const hypothesis of ranked) {
+    const twin = ranked.find(
+      (other) =>
+        other !== hypothesis &&
+        other.kind !== hypothesis.kind &&
+        other.offsets.length === hypothesis.offsets.length &&
+        other.offsets.every((offset, index) => offset === hypothesis.offsets[index]),
+    );
+    if (!twin) continue;
+    hypothesis.limitations.push(
+      `a ${twin.kind} parse splits this stream at exactly the same offsets; the boundaries are certain and the family name is not`,
+    );
+  }
+
+  const byKind = new Map<FramingKind, number>();
+  const deduped = ranked.filter((hypothesis) => {
+    // Fixed-size framing always produces several divisors; only the best two are useful.
+    const count = (byKind.get(hypothesis.kind) ?? 0) + 1;
+    byKind.set(hypothesis.kind, count);
+    return hypothesis.kind !== 'fixed' || count <= 2;
+  });
+
+  return deduped.slice(0, options.maxHypotheses ?? 4);
 }
 
 /**
@@ -109,6 +126,11 @@ export function inferFraming(stream: Buffer, options: { maxHypotheses?: number }
  * boundaries there. A length-prefix parse that ignores most of those boundaries has found a
  * tiling, not the framing. Penalise it so the marker-based parse wins.
  */
+function applyBoundaryConsistency(results: FramingHypothesis[], stream: Buffer): void {
+  applyMarkerConsistency(results, stream);
+  applyTerminatorConsistency(results, stream);
+}
+
 function applyMarkerConsistency(results: FramingHypothesis[], stream: Buffer): void {
   const marker = results
     .filter((h) => h.kind === 'start-marker' && h.startMarker !== undefined && h.messages.length >= 3 && h.score >= 0.8)
@@ -159,6 +181,44 @@ function applyMarkerConsistency(results: FramingHypothesis[], stream: Buffer): v
     );
     hypothesis.limitations.push(
       'most occurrences of the first two marker bytes fall inside these messages, so the wider marker is a restriction of a shorter one',
+    );
+  }
+}
+
+/**
+ * The mirror of the marker rule.
+ *
+ * A terminator that ends every message is a repeated boundary in the stream. A competing parse
+ * that treats most of those positions as the middle of a message has found a coarser tiling, not
+ * the framing — a coarser parse is exactly what happens when the real boundaries are invisible to
+ * it. Only a text-delimited parse may make this argument: a terminator byte that happens to occur
+ * in binary payloads proves nothing, and the score floor keeps those out.
+ */
+function applyTerminatorConsistency(results: FramingHypothesis[], stream: Buffer): void {
+  const delimited = results
+    .filter((h) => h.kind === 'delimiter' && h.delimiter !== undefined && h.messages.length >= 3 && h.score >= 0.82)
+    .sort((a, b) => b.score - a.score)[0];
+  if (!delimited?.delimiter) return;
+
+  const terminator = delimited.delimiter.terminator;
+  const positions: number[] = [];
+  for (let at = stream.indexOf(terminator); at !== -1; at = stream.indexOf(terminator, at + 1)) positions.push(at);
+  if (positions.length < 3) return;
+
+  for (const hypothesis of results) {
+    if (hypothesis.kind === 'delimiter') continue;
+    if (hypothesis.messages.length === 0) continue;
+    const ends = new Set<number>();
+    for (let i = 0; i < hypothesis.messages.length; i++) ends.add(hypothesis.offsets[i]! + hypothesis.messages[i]!.length);
+    const aligned = positions.filter((position) => ends.has(position + terminator.length)).length;
+    const missed = (positions.length - aligned) / positions.length;
+    if (missed < 0.3) continue;
+    hypothesis.score = clamp01(hypothesis.score - 0.25 * missed);
+    hypothesis.evidence.push(
+      `0x${terminator.toString('hex')} ends ${positions.length} messages under a competing parse, but only ${aligned} of those positions end one of these`,
+    );
+    hypothesis.limitations.push(
+      'a competing delimiter parse explains the repeated terminator at every occurrence; this parse treats most of them as payload',
     );
   }
 }
@@ -230,12 +290,14 @@ function readValue(data: Buffer, at: number, size: 1 | 2 | 4, endian: Endian): n
 
 function lengthPrefixHypotheses(stream: Buffer): FramingHypothesis[] {
   const out: FramingHypothesis[] = [];
-  const maxLenOffset = Math.min(8, stream.length - 2);
+  // The length field is not always the first thing in the message: a magic, a version, a type
+  // and a sequence number can precede it. Sixteen bytes covers every header this tool has met.
+  const maxLenOffset = Math.min(16, stream.length - 2);
   const streamPrintable = printableShare(stream);
 
   for (let lenOffset = 0; lenOffset <= maxLenOffset; lenOffset++) {
     for (const size of [1, 2, 4] as const) {
-      if (lenOffset + size > 16) continue;
+      if (lenOffset + size > 24) continue;
       for (const endian of size === 1 ? (['be'] as const) : (['le', 'be'] as const)) {
         for (let bias = -6; bias <= 12; bias++) {
           const spec: LengthPrefixSpec = { lenOffset, size, endian, bias };
@@ -373,12 +435,11 @@ const WIDTH_PRIOR: Record<1 | 2 | 4, number> = { 2: 0, 1: 1, 4: 2 };
  * Chooses between two length specs that segment the stream identically.
  *
  * Identical segmentation means both describe the same boundaries, so the choice is about which
- * field a reader should see. The narrowest width wins, because a wider field that merely contains
- * a narrower one (its high bytes always zero in this capture) cannot be distinguished from the
- * narrower field on the evidence available: a four-byte length and a two-byte protocol id
- * followed by a two-byte length produce the same bytes. That ambiguity is reported as a
- * limitation rather than resolved by guesswork; it disappears as soon as a message is long
- * enough for the high bytes to move.
+ * field a reader should see, and the data cannot settle it: a two-byte big-endian length `00 33`
+ * and a one-byte length at offset +1 produce the same stream until a message is long enough for
+ * the high byte to move. The tie breaks on the published corpus rather than on taste — 16-bit
+ * lengths are the common case (Modbus, DNS, RADIUS, most length-prefixed framing), then 8-bit,
+ * then 32-bit — and the ambiguity is reported as a limitation on the hypothesis.
  */
 function isPreferredLengthField(candidate: LengthPrefixSpec, incumbent: LengthPrefixSpec): boolean {
   if (candidate.size !== incumbent.size) return WIDTH_PRIOR[candidate.size] < WIDTH_PRIOR[incumbent.size];
@@ -526,6 +587,25 @@ function delimiterHypotheses(stream: Buffer): FramingHypothesis[] {
       ],
     });
   }
+
+  // 0x0a and 0x0d0a both consume the stream, because a 0x0d0a terminator contains 0x0a. The
+  // shorter terminator then splits at every 0x0a that happens to sit in a checksum or a payload,
+  // so the longer terminator — whose occurrences are a subset — wins.
+  for (const shorter of out) {
+    for (const longer of out) {
+      if (shorter === longer) continue;
+      const a = longer.delimiter!.terminator;
+      const b = shorter.delimiter!.terminator;
+      if (a.length <= b.length) continue;
+      if (!a.subarray(a.length - b.length).equals(b)) continue;
+      if (longer.messages.length >= shorter.messages.length) continue;
+      shorter.score = clamp01(shorter.score - 0.12);
+      shorter.limitations.push(
+        `every occurrence of 0x${a.toString('hex')} ends a message under a competing parse, and 0x${b.toString('hex')} is its last byte; this shorter terminator splits at ${shorter.messages.length - longer.messages.length} more positions`,
+      );
+    }
+  }
+
   return out;
 }
 

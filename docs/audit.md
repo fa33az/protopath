@@ -21,6 +21,21 @@ $ node bench/audit/probe-time.mjs      # whether the timestamp domain is reachab
 Eleven defects. Three of them produce confidently wrong output from a valid-looking capture.
 Nothing below was found by reading the README.
 
+## Status
+
+This document is the record of one audit run and is not edited as the code moves; each section
+describes the build as it was at `e5462f4`. What has changed since:
+
+| Finding | Status |
+|---|---|
+| 3.2 the `timestamp` value domain is unreachable | **fixed.** A four-byte field in the epoch window that advances by a constant amount is now a `timestamp` field, and the semantics pass labels the domain at 0.85. The proprietary benchmark scores it. |
+| 3.3 a field that steps by a constant other than one ends the header | **fixed.** Every column of the common prefix is classified before it is named, so a stride other than one is a `sequence` field and the header continues. |
+| 3.1 CRC recovery tiebreak, 2.1–2.4 emitted clients, 1.1–1.5 decoder and reassembly | open. The ranked fix plan at the end of this document is unchanged. |
+
+The probe scripts still run and still fail the way they describe, except `probe-time.mjs`, which
+now reports a `timestamp` field for a jittered clock — the point of keeping the probes is that the
+answer to "is this fixed?" is a command, not a sentence.
+
 ---
 
 ## 1. `src/core/net/` and `src/core/pcap/`

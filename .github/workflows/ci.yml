@@ -54,6 +54,16 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
         run: node scripts/benchmark.mjs
 
+      - name: Generate proprietary protocols from a parameter space
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        run: npm run bench:proprietary:corpus
+
+      - name: Benchmark against proprietary protocols drawn from a seed
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        env:
+          PROPRIETARY_FLOOR: '428'
+        run: node scripts/proprietary-bench.mjs
+
       - name: Verify the package contents
         if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
         run: npm pack --dry-run

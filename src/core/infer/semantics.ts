@@ -201,6 +201,15 @@ function classify(field: Field, values: number[], messages: Buffer[], printable:
     return { ...base, domain: 'counter', confidence: 0.95, note: 'increases by one per message; it orders the conversation' };
   }
 
+  if (field.role === 'timestamp') {
+    return {
+      ...base,
+      domain: 'timestamp',
+      confidence: 0.85,
+      note: 'a four-byte clock: it advances by a constant amount per message and every value lands in the epoch window',
+    };
+  }
+
   if (field.role === 'checksum') {
     return {
       ...base,

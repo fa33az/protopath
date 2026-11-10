@@ -10,3 +10,5 @@ bench/profile/
 __pycache__/
 *.pyc
 
+bench/proprietary/corpus/
+
