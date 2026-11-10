@@ -67,7 +67,7 @@ The candidate parameter set recomputes the check field of **every** message. The
 threshold: a CRC that reproduces 9 of 10 messages is not a CRC with low confidence, it is the wrong
 CRC. Anything short of 100% is discarded.
 
-## The two ambiguities, stated rather than hidden
+## Three ambiguities, stated rather than hidden
 
 **Every message the same covered length.** Then `T_n(init)` is the same for all of them, the system
 in step 2 is the zero matrix, and *any* initial value fits once `xorout` compensates. The capture
@@ -79,6 +79,15 @@ split is a convention.
 `[2, len-2)` are the same function with different seeds, so both reproduce the data once the
 initial value absorbs the difference. Only one answer is worth printing: the widest range starting
 at the earliest byte. The report lists the alternatives as a limitation.
+
+**Several parameter sets fit.** A polynomial of low degree can be made to reproduce a whole capture
+once the initial value is allowed to absorb what it cannot express, so a capture with any checksum
+at all can yield more than one fully verified answer — a degenerate 8-bit set beside the protocol's
+real 16-bit one. The bytes in the capture do not separate them; the only evidence is agreement
+between derivations. The candidate the most independent derivations reached — across layouts, byte
+orders and differentiating message pairs — is the one reported, and the rest are listed with it.
+Ordering by the smallest polynomial, which is what this did before, put the degenerate set in front
+on 10 of 60 private polynomials, and the generated client embedded it.
 
 ## What it does not attempt
 

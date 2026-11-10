@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/fa33az/protopath/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
   <a href="https://github.com/fa33az/protopath/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fa33az/protopath/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-82%20passing-2ea043?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-85%20passing-2ea043?style=flat-square">
   <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A520.19-339933?style=flat-square&logo=node.js&logoColor=white">
   <img alt="mcp" src="https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square">
   <img alt="captures" src="https://img.shields.io/badge/capture-pcap%20%C2%B7%20pcapng-cb3837?style=flat-square">
@@ -139,7 +139,9 @@ values cancels both and leaves one equation in the polynomial. Every polynomial 
 is verified against the whole capture, and the initial value then falls out of a small linear
 system over GF(2) built from two messages of different length. Nothing is fitted: a parameter set
 either reproduces every byte or it is discarded. When the capture cannot tell init from xorout —
-every message the same length — the report says the split is a convention.
+every message the same length — the report says the split is a convention. When more than one set
+reproduces the whole capture, the reported one is the set the most independent derivations agreed
+on, and the others are listed beside it rather than dropped.
 
 **Then the values are read.** A field that only ever holds 0 and 1 is a flag, not a number. A byte
 that tracks message length minus a constant is a body-length field. A four-byte field whose bytes
@@ -544,7 +546,7 @@ test suite. The manifest states the expected framing, checksum and family before
 inference rules, all listed in [the benchmark document](docs/benchmark.md#what-the-benchmark-changed).
 
 The fixtures are the other half: six protocols with documented layouts — five synthetic, one
-recorded from pymodbus - and 82 tests that fail when the inference changes.
+recorded from pymodbus - and 85 tests that fail when the inference changes.
 
 ## Documentation
 
@@ -562,7 +564,7 @@ recorded from pymodbus - and 82 tests that fail when the inference changes.
 ```console
 $ npm install
 $ npm run captures   # regenerate captures/ deterministically
-$ npm test           # build and run 82 tests
+$ npm test           # build and run 85 tests
 $ npm run bench      # score the inference against the unseen-protocol corpus
 $ npm run profile    # time each stage on a capture larger than the fixtures
 ```
